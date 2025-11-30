@@ -752,6 +752,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
   const [activeRole, setActiveRole] = useState(ROLES.STAFF);
+  const [userDataLoading, setUserDataLoading] = useState(false);
   const [activeAdminTab, setActiveAdminTab] = useState('overview'); // 'overview', 'users', 'schedules'
   const [tickets, setTickets] = useState([]);
   const [users, setUsers] = useState([]);
@@ -913,11 +914,21 @@ export default function App() {
     signInAsAnonymous().then(result => {
       console.log("Anonymous sign-in result:", result);
     });
+
     const unsubscribe = onAuthStateChange(async (u) => {
       console.log("Auth state changed:", u?.uid, "isAnonymous:", u?.isAnonymous);
+
+      // Start loading user data for authenticated users
+      if (u && !u.isAnonymous) {
+        setUserDataLoading(true);
+      }
+
       setUser(u);
 
       if (u && !u.isAnonymous) {
+        // Set default staff role initially - will be updated after verification
+        setActiveRole(ROLES.STAFF);
+
         // Fetch user data for role-based access
         try {
           const userDataResult = await getUserData(u.uid);
@@ -926,12 +937,14 @@ export default function App() {
 
             // Check if user is approved or blocked
             if (userData.status === 'blocked') {
+              setUserDataLoading(false);
               alert('Your account has been blocked. Please contact an administrator.');
               await signOutUser();
               return;
             }
 
             if (userData.status === 'pending') {
+              setUserDataLoading(false);
               alert('Your account is pending approval. Please wait for an administrator to approve your account.');
               await signOutUser();
               return;
@@ -952,19 +965,29 @@ export default function App() {
             }
           } else {
             console.error("Failed to fetch user data");
+            setUserDataLoading(false);
             alert('Account verification failed. Please contact support.');
             await signOutUser();
+            return;
           }
         } catch (error) {
           console.error('Error fetching user data:', error);
+          setUserDataLoading(false);
           alert('Account verification failed. Please contact support.');
           await signOutUser();
+          return;
         }
       } else {
         // Reset user data for anonymous user
         setUserData(null);
+        setUserDataLoading(false);
+        setActiveRole(ROLES.STAFF); // Reset role for anonymous users
       }
+
+      // Stop loading once user data is processed
+      setTimeout(() => setUserDataLoading(false), 100); // Small delay to prevent flash
     });
+
     return () => unsubscribe();
   }, []);
 
@@ -1082,7 +1105,7 @@ const handleCompleteTask = async (ticketId, technicianName) => {
               </h1>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              {isAuthenticated && (
+              {isAuthenticated && !userDataLoading && (
                 <div style={{ display: 'flex', backgroundColor: '#f8fafc', padding: '4px', borderRadius: '8px' }}>
                   {Object.values(ROLES).map((role) => (
                     <button key={role} onClick={() => setActiveRole(role)} style={{ padding: '6px 12px', fontSize: '12px', fontWeight: '500', borderRadius: '6px', backgroundColor: activeRole === role ? 'white' : 'transparent', color: activeRole === role ? '#4f46e5' : '#64748b', boxShadow: activeRole === role ? '0 1px 3px 0 rgba(0, 0, 0, 0.1)' : 'none', border: 'none', cursor: 'pointer' }}>
@@ -1129,7 +1152,7 @@ const handleCompleteTask = async (ticketId, technicianName) => {
             )}
 
             {/* Maintenance View */}
-            {isAuthenticated && activeRole === ROLES.MAINTENANCE && (
+            {isAuthenticated && !userDataLoading && activeRole === ROLES.MAINTENANCE && (
               <div style={styles.card}>
                 <div style={{ padding: '16px', borderBottom: '1px solid #f1f5f9', backgroundColor: '#f8fafc', borderRadius: '12px 12px 0 0', marginTop: '-24px', marginLeft: '-24px', marginRight: '-24px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -1207,7 +1230,7 @@ const handleCompleteTask = async (ticketId, technicianName) => {
             )}
 
             {/* Admin View with Tabs */}
-            {isAuthenticated && activeRole === ROLES.ADMIN && (
+            {isAuthenticated && !userDataLoading && activeRole === ROLES.ADMIN && (
               <div>
                 {/* Admin Tab Navigation */}
                 <div style={{ marginBottom: '24px', borderBottom: '1px solid #e2e8f0' }}>
