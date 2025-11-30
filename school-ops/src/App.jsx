@@ -633,23 +633,25 @@ function LoginModal({ isOpen, onClose }) {
 
     try {
       // Import what we need for registration
-      import('./auth').then(async ({ createUserAccount }) => {
-        const result = await createUserAccount(email, password);
-        if (result.success) {
-          setError(''); // Clear error
-          alert('Registration successful! Your account is pending approval by an Admin.');
-          setActiveTab('login');
-          setEmail('');
-          setPassword('');
-          setConfirmPassword('');
-        } else {
-          setError(result.error);
-        }
-      });
+      const { createUserAccount } = await import('./auth');
+      const result = await createUserAccount(email, password);
+
+      if (result.success) {
+        setError(''); // Clear error
+        alert('Registration successful! Your account is pending approval by an Admin.');
+        setActiveTab('login');
+        setEmail('');
+        setPassword('');
+        setConfirmPassword('');
+      } else {
+        setError(result.error);
+      }
     } catch (err) {
+      console.error('Registration error:', err);
       setError('Registration failed: ' + err.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
@@ -990,24 +992,30 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Fetch users for admin user management
+  // Fetch users for admin user management with real-time listener
   useEffect(() => {
+    let unsubscribe = null;
+
     if (isAuthenticated && activeRole === ROLES.ADMIN && activeAdminTab === 'users') {
-      const fetchUsers = async () => {
-        try {
-          const usersCollection = collection(db, 'users');
-          const snapshot = await getDocs(usersCollection);
-          const fetchedUsers = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-          setUsers(fetchedUsers);
-        } catch (error) {
-          console.error('Error fetching users:', error);
-        }
-      };
-      fetchUsers();
+      const usersCollection = collection(db, 'users');
+      unsubscribe = onSnapshot(usersCollection, (snapshot) => {
+        const fetchedUsers = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          // Convert Firestore timestamps to dates
+          createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt,
+          lastLogin: doc.data().lastLogin?.toDate?.() || doc.data().lastLogin
+        }));
+        setUsers(fetchedUsers);
+      }, (error) => {
+        console.error('Error fetching users:', error);
+      });
     }
+
+    // Cleanup listener when component unmounts or conditions change
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, [isAuthenticated, activeRole, activeAdminTab]);
 
 // --- Enhanced Status Update Function ---
