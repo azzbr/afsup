@@ -936,14 +936,7 @@ export default function App() {
             const userData = userDataResult.data;
 
             // Check if user is approved or blocked
-            if (userData.status === 'blocked') {
-              setUserDataLoading(false);
-              alert('Your account has been blocked. Please contact an administrator.');
-              await signOutUser();
-              return;
-            }
-
-            if (userData.status === 'pending') {
+            if (userData.status === 'blocked' || userData.status === 'pending') {
               setUserDataLoading(false);
               alert('Your account is pending approval. Please wait for an administrator to approve your account.');
               await signOutUser();
@@ -1397,30 +1390,15 @@ const handleCompleteTask = async (ticketId, technicianName) => {
                                   {user.createdAt?.toDate?.() ? user.createdAt.toDate().toLocaleDateString() : 'N/A'}
                                 </td>
                                 <td style={{ padding: '12px 16px' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    {user.status === 'pending' && (
-                                      <button
-                                        onClick={() => updateUserData(user.id, { status: 'approved' })}
-                                        style={{ ...styles.btnPrimary, fontSize: '12px', padding: '4px 8px' }}
-                                      >
-                                        Approve
-                                      </button>
-                                    )}
-                                    <button
-                                      onClick={() => {
-                                        const newStatus = user.status === 'approved' ? 'blocked' : 'approved';
-                                        updateUserData(user.id, { status: newStatus });
-                                      }}
-                                      style={{
-                                        ...styles.btnSecondary,
-                                        fontSize: '12px',
-                                        padding: '4px 8px',
-                                        backgroundColor: user.status === 'approved' ? '#dc2626' : '#16a34a',
-                                        color: 'white'
-                                      }}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <select
+                                      value={user.status || 'pending'}
+                                      onChange={(e) => updateUserData(user.id, { status: e.target.value })}
+                                      style={{ ...styles.select, fontSize: '12px', padding: '4px 8px', width: 'auto' }}
                                     >
-                                      {user.status === 'approved' ? 'Block' : 'Approve'}
-                                    </button>
+                                      <option value="approved">Approved</option>
+                                      <option value="blocked">Blocked</option>
+                                    </select>
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
                                       <input
                                         type="checkbox"
