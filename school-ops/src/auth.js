@@ -1,5 +1,5 @@
 // Import Firestore for user management
-import { signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { auth } from './firebase';
 import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from './firebase';
@@ -18,6 +18,8 @@ export const signInAsAnonymous = async () => {
 // Email/password authentication for staff/admin
 export const signInWithCredentials = async (email, password) => {
   try {
+    // Set persistence to browser local storage so users stay logged in across refreshes
+    await setPersistence(auth, browserLocalPersistence);
     const result = await signInWithEmailAndPassword(auth, email, password);
     return { success: true, user: result.user };
   } catch (error) {
@@ -33,6 +35,18 @@ export const signOutUser = async () => {
     return { success: true };
   } catch (error) {
     console.error('Sign-out error:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Initialize authentication with persistence
+export const initializeAuth = async () => {
+  try {
+    // Set default persistence to browser local storage for all auth types
+    await setPersistence(auth, browserLocalPersistence);
+    return { success: true };
+  } catch (error) {
+    console.error('Auth persistence initialization error:', error);
     return { success: false, error: error.message };
   }
 };

@@ -32,6 +32,9 @@ import {
 import { db } from './firebase';
 import { signInAsAnonymous, signInWithCredentials, signOutUser, onAuthStateChange, getUserData, updateUserData, initializeAuth } from './auth';
 import { compressImage, uploadImage } from './storage';
+import EnhancedScheduleForm from './enhanced_scheduler';
+import MaintenanceView from './MaintenanceView';
+import AdminView from './AdminView';
 
 // --- Constants ---
 const ISSUE_CATEGORIES = [
@@ -99,6 +102,52 @@ const LOCATIONS = [
   "Teachers Cabin Arb"
 ];
 
+const LOCATION_GROUPS = {
+  building3: {
+    name: "Building 3 (9 rooms)",
+    locations: [
+      "B3 Hall Ground", "B3 Hall Up", "B3 KG1", "B3 KG2A", "B3 KG2B",
+      "B3 KG3A", "B3 KG3B", "B3 KG3C", "B3 UnMark Room"
+    ]
+  },
+  building4: {
+    name: "Building 4 (14 rooms)",
+    locations: [
+      "B4 Art Room", "B4 Computer Lab", "B4- G4A", "B4- G4B", "B4- G5A",
+      "B4 Hall Ground", "B4 Hall Up", "B4 Library", "B4 Multimedia Room", "B4- Remedial Class"
+    ]
+  },
+  building5: {
+    name: "Building 5 (12 rooms)",
+    locations: [
+      "B5 G1A", "B5 G1B", "B5 G2A", "B5 G2B", "B5 G3A", "B5 G3B", "B5 G3C",
+      "B5 Hall Ground", "B5 Hall Up", "B5 Teachers Room", "B5 UnMark Room"
+    ]
+  },
+  adminAreas: {
+    name: "Admin Areas (4 rooms)",
+    locations: [
+      "Principal Office", "HR Office", "Accounting Office", "Academics Office"
+    ]
+  },
+  hallways: {
+    name: "Hallways & Common Areas (4 areas)",
+    locations: [
+      "B1 Admin Hall Ground", "B1 Admin Hall Up", "PE Hall", "Registration Waiting Area"
+    ]
+  },
+  specialRooms: {
+    name: "Special Rooms (4 rooms)",
+    locations: [
+      "Teachers Cabin Eng", "Teachers Cabin Arb", "Registration Office", "Consulor Office", "HOA Office"
+    ]
+  },
+  wholeSchool: {
+    name: "Whole School (43 locations)",
+    locations: LOCATIONS
+  }
+};
+
 const ROLES = {
   STAFF: 'Staff/Teacher',
   MAINTENANCE: 'Maintenance Team',
@@ -126,7 +175,7 @@ const USER_STATUS = {
   BLOCKED: 'blocked'
 };
 
-// --- Inline Styles ---
+// --- Inline Styles (Mobile-Optimized) ---
 const styles = {
   badgeBase: { padding: '4px 8px', borderRadius: '9999px', fontSize: '12px', fontWeight: '600', display: 'inline-block' },
   badgeOpen: { backgroundColor: '#fee2e2', color: '#dc2626', border: '1px solid #fecaca' },
@@ -136,14 +185,14 @@ const styles = {
   priorityMedium: { backgroundColor: '#dbeafe', color: '#2563eb' },
   priorityHigh: { backgroundColor: '#fed7aa', color: '#ea580c' },
   priorityCritical: { backgroundColor: '#dc2626', color: 'white' },
-  btnPrimary: { backgroundColor: '#4f46e5', color: 'white', padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' },
-  btnSecondary: { backgroundColor: '#f3f4f6', color: '#374151', padding: '8px 16px', borderRadius: '8px', border: '1px solid #d1d5db', cursor: 'pointer' },
-  btnYellow: { backgroundColor: '#eab308', color: 'white', padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '500', cursor: 'pointer', fontSize: '14px' },
-  btnGreen: { backgroundColor: '#16a34a', color: 'white', padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' },
+  btnPrimary: { backgroundColor: '#4f46e5', color: 'white', padding: '12px 16px', borderRadius: '8px', border: 'none', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px' },
+  btnSecondary: { backgroundColor: '#f3f4f6', color: '#374151', padding: '12px 16px', borderRadius: '8px', border: '1px solid #d1d5db', cursor: 'pointer', fontSize: '16px' },
+  btnYellow: { backgroundColor: '#eab308', color: 'white', padding: '12px 16px', borderRadius: '8px', border: 'none', fontWeight: '500', cursor: 'pointer', fontSize: '16px' },
+  btnGreen: { backgroundColor: '#16a34a', color: 'white', padding: '12px 16px', borderRadius: '8px', border: 'none', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px' },
   card: { backgroundColor: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)', border: '1px solid #e2e8f0', marginBottom: '16px' },
-  input: { width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', outline: 'none' },
-  select: { width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', backgroundColor: 'white' },
-  textarea: { width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', minHeight: '96px', resize: 'vertical' },
+  input: { width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '16px', outline: 'none' },
+  select: { width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '16px', backgroundColor: 'white' },
+  textarea: { width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '16px', minHeight: '96px', resize: 'vertical' },
   label: { display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '4px' }
 };
 
@@ -159,510 +208,7 @@ const PriorityBadge = ({ priority }) => {
   return <span style={{ ...styles.badgeBase, ...priorityStyles[priority], textTransform: 'uppercase', fontSize: '11px' }}>{priority}</span>;
 };
 
-// --- Image Modal for Zoom ---
-function ImageModal({ isOpen, src, onClose }) {
-  if (!isOpen || !src) return null;
-
-  return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.9)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 100,
-      padding: '40px'
-    }} onClick={onClose}>
-      <button
-        onClick={onClose}
-        style={{
-          position: 'absolute',
-          top: '20px',
-          right: '20px',
-          backgroundColor: 'white',
-          borderRadius: '50%',
-          padding: '8px',
-          border: 'none',
-          cursor: 'pointer',
-          width: '40px',
-          height: '40px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center'
-        }}
-      >
-        <X style={{ height: '20px', width: '20px', color: 'black' }} />
-      </button>
-      <img
-        src={src}
-        alt="Full Size"
-        style={{
-          maxWidth: '90vw',
-          maxHeight: '90vh',
-          objectFit: 'contain',
-          borderRadius: '8px'
-        }}
-        onClick={(e) => e.stopPropagation()}
-      />
-    </div>
-  );
-}
-
-// --- Updated ImageThumbnail with Zoom ---
-function ImageThumbnail({ src, onClick }) {
-  if (!src) return null;
-  return (
-    <div style={{ marginTop: '8px', cursor: 'pointer' }} onClick={() => onClick && onClick(src)}>
-      <img
-        src={src}
-        alt="Report Evidence"
-        style={{
-          width: '96px',
-          height: '96px',
-          objectFit: 'cover',
-          borderRadius: '8px',
-          border: '1px solid #e2e8f0',
-          boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
-          transition: 'transform 0.2s'
-        }}
-        onMouseOver={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
-        onMouseOut={(e) => e.currentTarget.style.transform = 'scale(1)'}
-      />
-    </div>
-  );
-}
-
-// --- Enhanced Completion Modal Component ---
-function CompletionModal({ isOpen, onClose, onComplete, ticket, user }) {
-  const [technicianName, setTechnicianName] = useState('');
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [uploadingImage, setUploadingImage] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const handleImageSelect = async (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        alert("File size too large. Please select an image under 5MB.");
-        return;
-      }
-      const compressed = await compressImage(file);
-      setSelectedFile(compressed);
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!technicianName.trim()) {
-      alert("Please enter the technician's name.");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      // Upload completion image if provided
-      let completionImageUrl = null;
-      if (selectedFile) {
-        setUploadingImage(true);
-        const uploadResult = await uploadImage(selectedFile, `${ticket.id}_completion`);
-        if (uploadResult.success) {
-          completionImageUrl = uploadResult.downloadURL;
-        }
-        setUploadingImage(false);
-      }
-
-      await onComplete(ticket.id, technicianName.trim(), completionImageUrl);
-    } catch (error) {
-      console.error('Completion error:', error);
-      alert('Error completing task. Please try again.');
-    }
-
-    setLoading(false);
-    setTechnicianName('');
-    setSelectedFile(null);
-    onClose();
-  };
-
-  useEffect(() => {
-    if (!isOpen) {
-      setTechnicianName('');
-      setSelectedFile(null);
-      setUploadingImage(false);
-      setLoading(false);
-    }
-  }, [isOpen]);
-
-  if (!isOpen || !ticket) return null;
-
-  return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.5)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 60
-    }}>
-      <div style={{
-        backgroundColor: 'white',
-        padding: '24px',
-        borderRadius: '12px',
-        width: '100%',
-        maxWidth: '450px',
-        margin: '16px'
-      }}>
-        <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>
-          Task Completed
-        </h3>
-        <p style={{ color: '#64748b', marginBottom: '16px', fontSize: '14px' }}>
-          Record the completion details.
-        </p>
-
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '16px' }}>
-            <label style={styles.label}>Technician Name *</label>
-            <input
-              type="text"
-              required
-              style={styles.input}
-              value={technicianName}
-              onChange={(e) => setTechnicianName(e.target.value)}
-              placeholder="Enter technician's name"
-              autoFocus
-            />
-          </div>
-
-          <div style={{ marginBottom: '16px' }}>
-            <label style={styles.label}>Completion Photo (Optional)</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: '6px', backgroundColor: 'white' }}>
-                <ImageIcon style={{ height: '16px', width: '16px', color: '#64748b' }} />
-                <span style={{ fontSize: '14px', color: '#64748b' }}>Add Completion Photo</span>
-                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageSelect} />
-              </label>
-              {selectedFile && (
-                <div style={{ position: 'relative' }}>
-                  <img src={selectedFile} alt="Preview" style={{ height: '40px', width: '40px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #e2e8f0' }} />
-                  <button type="button" onClick={() => setSelectedFile(null)} style={{ position: 'absolute', top: '-8px', right: '-8px', backgroundColor: '#ef4444', color: 'white', borderRadius: '9999px', padding: '2px', border: 'none', cursor: 'pointer' }}>
-                    <X style={{ height: '12px', width: '12px' }} />
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: '12px', paddingTop: '8px' }}>
-            <button
-              type="submit"
-              disabled={loading || uploadingImage || !technicianName.trim()}
-              style={{
-                ...styles.btnGreen,
-                flex: 1,
-                justifyContent: 'center',
-                opacity: (loading || uploadingImage || !technicianName.trim()) ? 0.5 : 1
-              }}
-            >
-              {loading ? 'Completing...' : uploadingImage ? 'Uploading...' : 'Mark Complete'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              style={styles.btnSecondary}
-              disabled={loading || uploadingImage}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// --- Report Form Component (manages its own state) ---
-function ReportForm({ user, onSuccess }) {
-  const [category, setCategory] = useState(ISSUE_CATEGORIES[0]);
-  const [location, setLocation] = useState(LOCATIONS[0]);
-  const [description, setDescription] = useState("");
-  const [priority, setPriority] = useState("medium");
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [uploadingImage, setUploadingImage] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-
-  const handleImageSelect = async (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        alert("File size too large. Please select an image under 5MB.");
-        return;
-      }
-      const compressed = await compressImage(file);
-      setSelectedFile(compressed);
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-    
-    if (!user) {
-      setError("Authentication error. Please refresh the page and try again.");
-      console.error("No user found. User object:", user);
-      return;
-    }
-
-    if (!description.trim()) {
-      setError("Please enter a description.");
-      return;
-    }
-
-    setSubmitting(true);
-    
-    try {
-      console.log("Submitting ticket for user:", user.uid);
-      const collectionRef = collection(db, 'maintenance_tickets');
-      const ticketData = {
-        category,
-        location,
-        description: description.trim(),
-        priority,
-        status: 'open',
-        reportedBy: user.uid,
-        reporterName: user.isAnonymous ? "Anonymous User" : "Staff Member",
-        createdAt: serverTimestamp(),
-        warnings: 0,
-        notes: []
-      };
-
-      const docRef = await addDoc(collectionRef, ticketData);
-      console.log("Ticket created with ID:", docRef.id);
-
-      if (selectedFile) {
-        setUploadingImage(true);
-        const uploadResult = await uploadImage(selectedFile, docRef.id);
-        if (uploadResult.success) {
-          await updateDoc(doc(db, 'maintenance_tickets', docRef.id), {
-            imageUrl: uploadResult.downloadURL
-          });
-        }
-        setUploadingImage(false);
-      }
-
-      // Reset form
-      setDescription("");
-      setPriority("medium");
-      setSelectedFile(null);
-      setCategory(ISSUE_CATEGORIES[0]);
-      setLocation(LOCATIONS[0]);
-      
-      if (onSuccess) onSuccess();
-      alert("Report submitted successfully!");
-    } catch (err) {
-      console.error("Error submitting:", err);
-      setError("Failed to submit ticket: " + err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit}>
-      {error && (
-        <div style={{ backgroundColor: '#fef2f2', color: '#dc2626', padding: '12px', borderRadius: '6px', marginBottom: '16px', fontSize: '14px' }}>
-          {error}
-        </div>
-      )}
-      
-      {!user && (
-        <div style={{ backgroundColor: '#fef3c7', color: '#92400e', padding: '12px', borderRadius: '6px', marginBottom: '16px', fontSize: '14px' }}>
-          ⏳ Connecting to server... Please wait.
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-        <div>
-          <label style={styles.label}>Issue Category</label>
-          <select style={styles.select} value={category} onChange={(e) => setCategory(e.target.value)}>
-            {ISSUE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={styles.label}>Location</label>
-              <select style={styles.select} value={location} onChange={(e) => setLocation(e.target.value)}>
-                {LOCATIONS.map(l => <option key={l} value={l}>{l}</option>)}
-              </select>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-        <div>
-          <label style={styles.label}>Priority</label>
-          <div style={{ display: 'flex', gap: '16px', height: '40px', alignItems: 'center' }}>
-            {['low', 'medium', 'high', 'critical'].map(p => (
-              <label key={p} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                <input type="radio" name="priority" value={p} checked={priority === p} onChange={(e) => setPriority(e.target.value)} />
-                <span style={{ textTransform: 'capitalize', fontSize: '14px', color: '#374151' }}>{p}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-        <div>
-          <label style={styles.label}>Photo Evidence (Optional)</label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: '6px', backgroundColor: 'white' }}>
-              <ImageIcon style={{ height: '16px', width: '16px', color: '#64748b' }} />
-              <span style={{ fontSize: '14px', color: '#64748b' }}>Add Photo</span>
-              <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageSelect} />
-            </label>
-            {selectedFile && (
-              <div style={{ position: 'relative' }}>
-                <img src={selectedFile} alt="Preview" style={{ height: '40px', width: '40px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #e2e8f0' }} />
-                <button type="button" onClick={() => setSelectedFile(null)} style={{ position: 'absolute', top: '-8px', right: '-8px', backgroundColor: '#ef4444', color: 'white', borderRadius: '9999px', padding: '2px', border: 'none', cursor: 'pointer' }}>
-                  <X style={{ height: '12px', width: '12px' }} />
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ marginBottom: '16px' }}>
-        <label style={styles.label}>Description *</label>
-        <textarea
-          required
-          style={styles.textarea}
-          placeholder="Please describe the issue in detail..."
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-      </div>
-
-      <button
-        type="submit"
-        disabled={submitting || uploadingImage || !user}
-        style={{ ...styles.btnPrimary, width: '100%', justifyContent: 'center', opacity: (submitting || uploadingImage || !user) ? 0.5 : 1 }}
-      >
-        {submitting ? 'Submitting...' : uploadingImage ? 'Uploading Image...' : !user ? 'Connecting...' : 'Submit Report'}
-      </button>
-    </form>
-  );
-}
-
-// --- Schedule Form Modal ---
-function ScheduleForm({ isOpen, onClose, onSubmit }) {
-  const [category, setCategory] = useState(ISSUE_CATEGORIES[0]);
-  const [location, setLocation] = useState(LOCATIONS[0]);
-  const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState('medium');
-  const [frequencyDays, setFrequencyDays] = useState(30);
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-
-    const scheduleData = {
-      category,
-      location,
-      description: description.trim(),
-      priority,
-      frequencyDays: parseInt(frequencyDays)
-    };
-
-    await onSubmit(scheduleData);
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    if (!isOpen) {
-      setCategory(ISSUE_CATEGORIES[0]);
-      setLocation(LOCATIONS[0]);
-      setDescription('');
-      setPriority('medium');
-      setFrequencyDays(30);
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div style={{ backgroundColor: 'white', padding: '24px', borderRadius: '12px', width: '100%', maxWidth: '500px', margin: '16px' }}>
-        <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1e293b', marginBottom: '20px' }}>
-          Create Recurring Schedule
-        </h2>
-
-        <form onSubmit={handleSubmit}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-            <div>
-              <label style={styles.label}>Issue Category</label>
-              <select style={styles.select} value={category} onChange={(e) => setCategory(e.target.value)}>
-                {ISSUE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={styles.label}>Location</label>
-              <select style={styles.select} value={location} onChange={(e) => setLocation(e.target.value)}>
-                {LOCATIONS.map((l) => (
-                  <option key={l} value={l}>{l}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-            <div>
-              <label style={styles.label}>Priority</label>
-              <select style={styles.select} value={priority} onChange={(e) => setPriority(e.target.value)}>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="critical">Critical</option>
-              </select>
-            </div>
-            <div>
-              <label style={styles.label}>Frequency (Days)</label>
-              <input
-                type="number"
-                required
-                min="1"
-                max="365"
-                style={styles.input}
-                value={frequencyDays}
-                onChange={(e) => setFrequencyDays(e.target.value)}
-                placeholder="e.g., 30 for monthly"
-              />
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '16px' }}>
-            <label style={styles.label}>Task Description</label>
-            <textarea
-              required
-              style={styles.textarea}
-              placeholder="Describe the recurring maintenance task..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </div>
-
-          <div style={{ display: 'flex', gap: '12px', paddingTop: '8px' }}>
-            <button type="submit" disabled={loading} style={{ ...styles.btnPrimary, flex: 1, justifyContent: 'center', opacity: loading ? 0.5 : 1 }}>
-              {loading ? 'Creating...' : 'Create Schedule'}
-            </button>
-            <button type="button" onClick={onClose} style={styles.btnSecondary}>Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// --- Enhanced Login Modal (with Registration) ---
+// --- Login Modal Component ---
 function LoginModal({ isOpen, onClose }) {
   const [activeTab, setActiveTab] = useState('login'); // 'login' or 'register'
   const [email, setEmail] = useState('');
@@ -680,7 +226,7 @@ function LoginModal({ isOpen, onClose }) {
       const result = await signInWithCredentials(email, password);
       if (result.success) {
         onClose();
-        // Reset will happen in useEffect when user state changes
+        alert('Login successful!');
       } else {
         setError(result.error);
       }
@@ -708,12 +254,11 @@ function LoginModal({ isOpen, onClose }) {
     }
 
     try {
-      // Import what we need for registration
       const { createUserAccount } = await import('./auth');
       const result = await createUserAccount(email, password);
 
       if (result.success) {
-        setError(''); // Clear error
+        setError('');
         alert('Registration successful! Your account is pending approval by an Admin.');
         setActiveTab('login');
         setEmail('');
@@ -723,7 +268,6 @@ function LoginModal({ isOpen, onClose }) {
         setError(result.error);
       }
     } catch (err) {
-      console.error('Registration error:', err);
       setError('Registration failed: ' + err.message);
     } finally {
       setLoading(false);
@@ -745,7 +289,6 @@ function LoginModal({ isOpen, onClose }) {
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
       <div style={{ backgroundColor: 'white', padding: '24px', borderRadius: '12px', width: '100%', maxWidth: '400px', margin: '16px' }}>
-        {/* Tab Buttons */}
         <div style={{ display: 'flex', marginBottom: '20px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
           <button
             onClick={() => setActiveTab('login')}
@@ -756,7 +299,8 @@ function LoginModal({ isOpen, onClose }) {
               border: 'none',
               backgroundColor: activeTab === 'login' ? '#4f46e5' : 'transparent',
               color: activeTab === 'login' ? 'white' : '#64748b',
-              fontWeight: '500'
+              fontWeight: '500',
+              cursor: 'pointer'
             }}
           >
             Login
@@ -770,7 +314,8 @@ function LoginModal({ isOpen, onClose }) {
               border: 'none',
               backgroundColor: activeTab === 'register' ? '#4f46e5' : 'transparent',
               color: activeTab === 'register' ? 'white' : '#64748b',
-              fontWeight: '500'
+              fontWeight: '500',
+              cursor: 'pointer'
             }}
           >
             Register
@@ -823,81 +368,323 @@ function LoginModal({ isOpen, onClose }) {
   );
 }
 
+// --- Report Form Component ---
+function ReportForm({ user, onSuccess }) {
+  const [category, setCategory] = useState(ISSUE_CATEGORIES[0]);
+  const [location, setLocation] = useState(LOCATIONS[0]);
+  const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState("medium");
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleImageSelect = async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length + selectedFiles.length > 5) {
+      alert("Maximum 5 images allowed per report.");
+      return;
+    }
+
+    const compressedFiles = [];
+    for (const file of files) {
+      if (file.size > 5 * 1024 * 1024) {
+        alert(`File "${file.name}" is too large. Please select images under 5MB.`);
+        continue;
+      }
+      try {
+        const compressed = await compressImage(file);
+        compressedFiles.push(compressed);
+      } catch (error) {
+        console.error("Error compressing image:", error);
+      }
+    }
+
+    setSelectedFiles(prev => [...prev, ...compressedFiles]);
+    e.target.value = null;
+  };
+
+  const removeImage = (index) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+
+    if (!user) {
+      setError("Authentication error. Please refresh the page and try again.");
+      return;
+    }
+
+    if (!description.trim()) {
+      setError("Please enter a description.");
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      console.log("Submitting ticket for user:", user.uid);
+      const collectionRef = collection(db, 'maintenance_tickets');
+      // Get submittedBy from the parent component's userData if available
+      const getUserEmail = () => {
+        if (user.isAnonymous) return null;
+        return user.email || null;
+      };
+
+      const ticketData = {
+        category,
+        location,
+        description: description.trim(),
+        priority,
+        status: 'open',
+        reportedBy: user.uid,
+        reporterName: user.isAnonymous ? "Anonymous User" : "Staff Member",
+        submittedBy: getUserEmail(),
+        createdAt: serverTimestamp(),
+        warnings: 0,
+        notes: []
+      };
+
+      const docRef = await addDoc(collectionRef, ticketData);
+      console.log("Ticket created with ID:", docRef.id);
+
+      if (selectedFiles.length > 0) {
+        setUploadingImages(true);
+        const uploadPromises = selectedFiles.map((file, index) =>
+          uploadImage(file, `${docRef.id}_${index}`)
+        );
+
+        try {
+          const uploadResults = await Promise.all(uploadPromises);
+          const successfulUploads = uploadResults.filter(result => result.success);
+
+          if (successfulUploads.length > 0) {
+            const imageUrls = successfulUploads.map(result => result.downloadURL);
+            await updateDoc(doc(db, 'maintenance_tickets', docRef.id), {
+              imageUrls: imageUrls
+            });
+          }
+        } catch (error) {
+          console.error("Multiple image upload error:", error);
+        }
+        setUploadingImages(false);
+      }
+
+      setDescription("");
+      setPriority("medium");
+      setSelectedFiles([]);
+      setCategory(ISSUE_CATEGORIES[0]);
+      setLocation(LOCATIONS[0]);
+
+      if (onSuccess) onSuccess();
+      alert("Report submitted successfully!");
+    } catch (err) {
+      console.error("Error submitting:", err);
+      setError("Failed to submit ticket: " + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      {error && (
+        <div style={{ backgroundColor: '#fef2f2', color: '#dc2626', padding: '12px', borderRadius: '6px', marginBottom: '16px', fontSize: '14px' }}>
+          {error}
+        </div>
+      )}
+
+      {!user && (
+        <div style={{ backgroundColor: '#fef3c7', color: '#92400e', padding: '12px', borderRadius: '6px', marginBottom: '16px', fontSize: '14px' }}>
+          ⏳ Connecting to server... Please wait.
+        </div>
+      )}
+
+      <div className="responsive-grid-2">
+        <div>
+          <label style={styles.label}>Issue Category</label>
+          <select style={styles.select} value={category} onChange={(e) => setCategory(e.target.value)}>
+            {ISSUE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={styles.label}>Location</label>
+          <select style={styles.select} value={location} onChange={(e) => setLocation(e.target.value)}>
+            {LOCATIONS.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="responsive-grid-2">
+        <div>
+          <label style={styles.label}>Priority</label>
+          <div style={{ display: 'flex', gap: '16px', height: '40px', alignItems: 'center' }}>
+            {['low', 'medium', 'high', 'critical'].map(p => (
+              <label key={p} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="radio" name="priority" value={p} checked={priority === p} onChange={(e) => setPriority(e.target.value)} />
+                <span style={{ textTransform: 'capitalize', fontSize: '14px', color: '#374151' }}>{p}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label style={styles.label}>Photo Evidence (Optional) - Max 5 images</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <label style={{
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 16px',
+              border: '1px solid #d1d5db',
+              borderRadius: '6px',
+              backgroundColor: 'white',
+              width: 'fit-content'
+            }}>
+              <ImageIcon style={{ height: '16px', width: '16px', color: '#64748b' }} />
+              <span style={{ fontSize: '14px', color: '#64748b' }}>Add Photos</span>
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={handleImageSelect}
+              />
+            </label>
+            {selectedFiles.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px', maxWidth: '400px' }}>
+                {selectedFiles.map((file, index) => (
+                  <div key={index} style={{ position: 'relative' }}>
+                    <img
+                      src={file}
+                      alt={`Preview ${index + 1}`}
+                      style={{
+                        width: '80px',
+                        height: '80px',
+                        objectFit: 'cover',
+                        borderRadius: '6px',
+                        border: '1px solid #e2e8f0'
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(index)}
+                      style={{
+                        position: 'absolute',
+                        top: '-6px',
+                        right: '-6px',
+                        backgroundColor: '#ef4444',
+                        color: 'white',
+                        borderRadius: '9999px',
+                        padding: '2px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        width: '20px',
+                        height: '20px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      <X style={{ height: '12px', width: '12px' }} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: '12px', color: '#64748b' }}>
+              {selectedFiles.length}/5 photos selected
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: '16px' }}>
+        <label style={styles.label}>Description *</label>
+        <textarea
+          required
+          style={styles.textarea}
+          placeholder="Please describe the issue in detail..."
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </div>
+
+      <button
+        type="submit"
+        disabled={submitting || uploadingImages || !user}
+        style={{ ...styles.btnPrimary, width: '100%', justifyContent: 'center', opacity: (submitting || uploadingImages || !user) ? 0.5 : 1 }}
+      >
+        {submitting ? 'Submitting...' : uploadingImages ? 'Uploading Images...' : !user ? 'Connecting...' : 'Submit Report'}
+      </button>
+    </form>
+  );
+}
+
 // --- Main Application ---
 export default function App() {
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
   const [activeRole, setActiveRole] = useState(ROLES.STAFF);
   const [userDataLoading, setUserDataLoading] = useState(false);
-  const [activeAdminTab, setActiveAdminTab] = useState('overview'); // 'overview', 'users', 'schedules', 'reports'
+  const [activeAdminTab, setActiveAdminTab] = useState('overview');
   const [tickets, setTickets] = useState([]);
   const [users, setUsers] = useState([]);
   const [scheduledTasks, setScheduledTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [showScheduleForm, setShowScheduleForm] = useState(false);
 
   const isAuthenticated = user && user.isAnonymous === false;
 
-  // Image zoom modal state
-  const [imageModalOpen, setImageModalOpen] = useState(false);
-  const [modalImageSrc, setModalImageSrc] = useState('');
-
-  // Task filtering state for maintenance view
-  const [filterCriteria, setFilterCriteria] = useState({
-    priority: 'all', // 'all', 'high_priority', 'normal', 'critical_only'
-    status: 'all'    // 'all', 'open', 'in_progress'
-  });
-
-  // Completion modal state
-  const [completionModalOpen, setCompletionModalOpen] = useState(false);
-  const [selectedTicket, setSelectedTicket] = useState(null);
-
-  const openImageModal = (src) => {
-    setModalImageSrc(src);
-    setImageModalOpen(true);
-  };
-
-  const closeImageModal = () => {
-    setImageModalOpen(false);
-    setModalImageSrc('');
-  };
-
-  // --- Schedule Modal State ---
-  const [showScheduleForm, setShowScheduleForm] = useState(false);
-
-  // --- Fetch scheduled tasks ---
-  useEffect(() => {
-    if (isAuthenticated && activeRole === ROLES.ADMIN && activeAdminTab === 'schedules') {
-      const fetchSchedules = async () => {
-        try {
-          const schedulesCollection = collection(db, 'scheduled_tasks');
-          const scheduleDoc = await getDocs(schedulesCollection);
-          const fetchedSchedules = scheduleDoc.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            createdAt: doc.data().createdAt?.toDate() || new Date(),
-            lastRun: doc.data().lastRun?.toDate() || null,
-            nextRun: doc.data().nextRun?.toDate() || new Date()
-          }));
-          setScheduledTasks(fetchedSchedules);
-        } catch (error) {
-          console.error('Error fetching schedules:', error);
-        }
+  // Enhanced createSchedule for multiple locations
+  const createSchedule = async (scheduleData) => {
+    try {
+      const enhancedScheduleData = {
+        ...scheduleData,
+        createdAt: serverTimestamp(),
+        createdBy: user.uid,
+        lastRun: scheduleData.isStartImmediately ? serverTimestamp() : null,
+        isActive: true,
+        // Add computed fields for better querying
+        totalLocations: scheduleData.locations.length,
+        nextDue: scheduleData.nextRun ? new Date(scheduleData.nextRun) : null,
+        frequencyDescription: `Every ${scheduleData.frequencyDays} days`
       };
-      fetchSchedules();
-    }
-  }, [isAuthenticated, activeRole, activeAdminTab]);
 
-  // --- Check for due schedules on admin login ---
-  useEffect(() => {
-    if (isAuthenticated && activeRole === ROLES.ADMIN && user) {
-      checkAndCreateDueTasks();
-    }
-  }, [isAuthenticated, activeRole, user]);
+      // Create the main schedule document
+      const docRef = await addDoc(collection(db, 'scheduled_tasks'), enhancedScheduleData);
+      setShowScheduleForm(false);
+      alert('Advanced schedule created successfully! Will create ' + scheduleData.totalLocations + ' maintenance tickets.');
 
+      // Refresh schedules list
+      if (activeAdminTab === 'schedules') {
+        const schedulesCollection = collection(db, 'scheduled_tasks');
+        const scheduleDocs = await getDocs(schedulesCollection);
+        const fetchedSchedules = scheduleDocs.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            nextRun: data.nextRun?.toDate ? data.nextRun.toDate() : new Date(),
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
+            lastRun: data.lastRun?.toDate ? data.lastRun.toDate() : null
+          };
+        });
+        setScheduledTasks(fetchedSchedules);
+      }
+    } catch (error) {
+      console.error('Error creating enhanced schedule:', error);
+      alert('Error creating schedule: ' + error.message);
+    }
+  };
+
+  // Modified to handle multiple location schedules
   const checkAndCreateDueTasks = async () => {
-    if (!user) return;
+    if (!user || !isAuthenticated) return;
 
     try {
       const schedulesCollection = collection(db, 'scheduled_tasks');
@@ -906,168 +693,131 @@ export default function App() {
 
       for (const scheduleDoc of schedulesQuery.docs) {
         const schedule = scheduleDoc.data();
-        const lastRun = schedule.lastRun?.toDate() || new Date(0);
-        const nextRun = schedule.nextRun?.toDate() || new Date(0);
+        if (!schedule.isActive) continue;
+
+        const nextRun = schedule.nextRun?.toDate ? schedule.nextRun.toDate() : null;
+        if (!nextRun) continue;
+
+        // SAFETY CHECK: Prevent double booking - if it ran less than 20 hours ago, skip
+        const lastRun = schedule.lastRun?.toDate ? schedule.lastRun.toDate() : null;
+        if (lastRun) {
+          const twentyHoursAgo = new Date(now.getTime() - (20 * 60 * 60 * 1000));
+          if (lastRun > twentyHoursAgo) {
+            console.log(`Skipping schedule ${scheduleDoc.id} - already ran in the last 20 hours.`);
+            continue;
+          }
+        }
 
         if (now >= nextRun) {
-          // Create a new maintenance ticket
-          const ticketData = {
-            category: schedule.category,
-            location: schedule.location,
-            description: `${schedule.description} [Scheduled: Every ${schedule.frequencyDays} days]`,
-            priority: schedule.priority || 'medium',
-            status: 'open',
-            reportedBy: user.uid,
-            reporterName: 'Scheduled System',
-            createdAt: serverTimestamp(),
-            warnings: 0,
-            notes: [],
-            scheduledFrom: scheduleDoc.id // Reference to the schedule
-          };
+          console.log(`Creating maintenance tickets for schedule "${schedule.description}"`);
 
-          await addDoc(collection(db, 'maintenance_tickets'), ticketData);
+          // Create tickets for each location in the schedule
+          const ticketPromises = schedule.locations.map(async (location) => {
+            const ticketData = {
+              category: schedule.category,
+              location: location,
+              description: `${schedule.description} [Auto-generated from schedule: "${scheduleDoc.id}"]`,
+              priority: schedule.priority || 'medium',
+              status: 'open',
+              reportedBy: schedule.createdBy,
+              reporterName: 'Scheduled Maintenance System',
+              createdAt: serverTimestamp(),
+              warnings: 0,
+              notes: [`Auto-generated on ${now.toLocaleDateString()} as part of scheduled maintenance`],
+              scheduledFrom: scheduleDoc.id
+            };
 
-          // Update the schedule's next run date and last run
+            return addDoc(collection(db, 'maintenance_tickets'), ticketData);
+          });
+
+          await Promise.all(ticketPromises);
+
+          // Calculate next run date
           const nextRunDate = new Date(now);
           nextRunDate.setDate(nextRunDate.getDate() + schedule.frequencyDays);
 
+          // Update the schedule's next run date and last run
           await updateDoc(doc(db, 'scheduled_tasks', scheduleDoc.id), {
             lastRun: serverTimestamp(),
             nextRun: nextRunDate
           });
+
+          console.log(`Created ${schedule.locations.length} tickets for scheduled maintenance`);
         }
       }
     } catch (error) {
-      console.error('Error checking due tasks:', error);
+      console.error('Error checking due schedules:', error);
     }
   };
 
-  const createSchedule = async (scheduleData) => {
-    try {
-      const scheduleDoc = {
-        ...scheduleData,
-        createdAt: serverTimestamp(),
-        lastRun: null,
-        nextRun: new Date(),
-        createdBy: user.uid,
-        isActive: true
-      };
-
-      const docRef = await addDoc(collection(db, 'scheduled_tasks'), scheduleDoc);
-      setShowScheduleForm(false);
-      alert('Schedule created successfully!');
-
-      // Refresh schedules
-      if (activeAdminTab === 'schedules') {
-        const schedulesCollection = collection(db, 'scheduled_tasks');
-        const scheduleDoc = await getDocs(schedulesCollection);
-        const fetchedSchedules = scheduleDoc.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-          nextRun: doc.data().nextRun?.toDate() || new Date()
-        }));
-        setScheduledTasks(fetchedSchedules);
-      }
-    } catch (error) {
-      console.error('Error creating schedule:', error);
-      alert('Error creating schedule: ' + error.message);
-    }
-  };
-
-  const deleteSchedule = async (scheduleId) => {
-    if (!confirm("Are you sure you want to delete this schedule?")) return;
-
-    try {
-      await deleteDoc(doc(db, 'scheduled_tasks', scheduleId));
-      setScheduledTasks(prev => prev.filter(s => s.id !== scheduleId));
-    } catch (error) {
-      console.error('Error deleting schedule:', error);
-    }
-  };
-
+  // Initialize authentication
   useEffect(() => {
-    // Initialize Firebase auth persistence first
-    console.log("Initializing Firebase auth persistence...");
-    initializeAuth().then(authResult => {
-      console.log("Auth persistence initialized:", authResult);
-
-      console.log("Starting anonymous sign-in...");
-      signInAsAnonymous().then(result => {
-        console.log("Anonymous sign-in result:", result);
-      });
+    initializeAuth().then(() => {
+      console.log("Auth initialized successfully");
     }).catch(error => {
-      console.error("Failed to initialize auth persistence:", error);
+      console.error("Failed to initialize auth:", error);
     });
 
     const unsubscribe = onAuthStateChange(async (u) => {
-      console.log("Auth state changed:", u?.uid, "isAnonymous:", u?.isAnonymous);
-
-      // Start loading user data for authenticated users
-      if (u && !u.isAnonymous) {
-        setUserDataLoading(true);
+      if (!u) {
+        // Only sign in anonymously if no user exists at all
+        signInAsAnonymous().then(result => {
+          console.log("Anonymous sign-in result:", result);
+        }).catch(error => {
+          console.error("Anonymous sign-in error:", error);
+        });
+      }
+      if (!u) {
+        setUser(null);
+        setUserData(null);
+        setActiveRole(ROLES.STAFF);
+        return;
       }
 
       setUser(u);
 
-      if (u && !u.isAnonymous) {
-        // Set default staff role initially - will be updated after verification
-        setActiveRole(ROLES.STAFF);
-
-        // Fetch user data for role-based access
+      if (!u.isAnonymous) {
+        setUserDataLoading(true);
         try {
           const userDataResult = await getUserData(u.uid);
           if (userDataResult.success) {
-            const userData = userDataResult.data;
-
-            // Check if user is approved or blocked
-            if (userData.status === 'blocked' || userData.status === 'pending') {
-              setUserDataLoading(false);
+            const data = userDataResult.data;
+            if (data.status === 'blocked' || data.status === 'pending') {
               alert('Your account is pending approval. Please wait for an administrator to approve your account.');
               await signOutUser();
               return;
             }
 
-            if (userData.status === 'approved') {
-              setUserData(userData);
+            setUserData(data);
+            if (data.viewAll) {
+              setActiveRole(ROLES.ADMIN);
+            } else {
+              if (data.role === 'admin') setActiveRole(ROLES.ADMIN);
+              else if (data.role === 'maintenance') setActiveRole(ROLES.MAINTENANCE);
+              else setActiveRole(ROLES.STAFF);
+            }
 
-              // Set role based on database (with viewAll override)
-              if (userData.viewAll) {
-                setActiveRole(ROLES.ADMIN); // Special permission allows viewing all
-              } else {
-                // Set role normally based on database
-                if (userData.role === 'admin') setActiveRole(ROLES.ADMIN);
-                else if (userData.role === 'maintenance') setActiveRole(ROLES.MAINTENANCE);
-                else setActiveRole(ROLES.STAFF);
-              }
+            // Check for due schedules when admin logs in
+            if (data.role === 'admin' || data.viewAll) {
+              setTimeout(() => checkAndCreateDueTasks(), 2000);
             }
           } else {
-            console.error("Failed to fetch user data");
-            setUserDataLoading(false);
             alert('Account verification failed. Please contact support.');
             await signOutUser();
-            return;
           }
         } catch (error) {
           console.error('Error fetching user data:', error);
-          setUserDataLoading(false);
           alert('Account verification failed. Please contact support.');
           await signOutUser();
-          return;
         }
-      } else {
-        // Reset user data for anonymous user
-        setUserData(null);
-        setUserDataLoading(false);
-        setActiveRole(ROLES.STAFF); // Reset role for anonymous users
       }
-
-      // Stop loading once user data is processed
-      setTimeout(() => setUserDataLoading(false), 100); // Small delay to prevent flash
+      setTimeout(() => setUserDataLoading(false), 100);
     });
 
     return () => unsubscribe();
   }, []);
 
+  // Fetch tickets
   useEffect(() => {
     if (!db) return;
     const collectionRef = collection(db, 'maintenance_tickets');
@@ -1075,8 +825,8 @@ export default function App() {
       const fetchedTickets = snapshot.docs.map(d => ({
         id: d.id,
         ...d.data(),
-        createdAt: d.data().createdAt?.toDate() || new Date(),
-        resolvedAt: d.data().resolvedAt?.toDate() || null
+        createdAt: d.data().createdAt?.toDate ? d.data().createdAt.toDate() : new Date(),
+        resolvedAt: d.data().resolvedAt?.toDate ? d.data().resolvedAt.toDate() : null
       }));
       fetchedTickets.sort((a, b) => {
         if (a.status === 'resolved' && b.status !== 'resolved') return 1;
@@ -1092,127 +842,180 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Fetch users for admin user management with real-time listener
-  useEffect(() => {
-    let unsubscribe = null;
-
-    if (isAuthenticated && activeRole === ROLES.ADMIN && activeAdminTab === 'users') {
-      const usersCollection = collection(db, 'users');
-      unsubscribe = onSnapshot(usersCollection, (snapshot) => {
-        const fetchedUsers = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-          // Convert Firestore timestamps to dates
-          createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt,
-          lastLogin: doc.data().lastLogin?.toDate?.() || doc.data().lastLogin
-        }));
-        setUsers(fetchedUsers);
-      }, (error) => {
-        console.error('Error fetching users:', error);
-      });
-    }
-
-    // Cleanup listener when component unmounts or conditions change
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
-  }, [isAuthenticated, activeRole, activeAdminTab]);
-
-// --- Enhanced Status Update Function ---
-const updateStatus = async (ticketId, newStatus, technicianName = null) => {
-  try {
-    const docRef = doc(db, 'maintenance_tickets', ticketId);
-    const updateData = {
-      status: newStatus,
-      updatedAt: serverTimestamp()
-    };
-
-    if (newStatus === 'in_progress') {
-      updateData.startedAt = serverTimestamp();
-    } else if (newStatus === 'resolved') {
-      updateData.resolvedAt = serverTimestamp();
-      if (technicianName) {
-        updateData.resolvedBy = technicianName;
-      }
-    }
-
-    await updateDoc(docRef, updateData);
-  } catch (err) {
-    console.error("Error updating status:", err);
-    alert("Error updating task status. Please try again.");
-  }
-};
-
-// --- Completion Handler ---
-const handleCompleteTask = async (ticketId, technicianName, completionImageUrl = null) => {
-  const updateData = {
-    resolvedBy: technicianName,
-    resolvedAt: serverTimestamp(),
-    completedBy: user?.email || user?.uid || 'Unknown',
-    completedAt: serverTimestamp()
-  };
-
-  if (completionImageUrl) {
-    updateData.completionImageUrl = completionImageUrl;
-  }
-
-  try {
-    const docRef = doc(db, 'maintenance_tickets', ticketId);
-    await updateDoc(docRef, updateData);
-  } catch (err) {
-    console.error("Error completing task:", err);
-    alert("Error completing task. Please try again.");
-  }
-
-  setCompletionModalOpen(false);
-  setSelectedTicket(null);
-};
-
-  const issueWarning = async (ticketId, currentWarnings) => {
-    try {
-      const docRef = doc(db, 'maintenance_tickets', ticketId);
-      await updateDoc(docRef, { warnings: (currentWarnings || 0) + 1, lastWarningAt: serverTimestamp() });
-    } catch (err) {
-      console.error("Error issuing warning:", err);
-    }
-  };
-
+  // Delete ticket function (used by AdminView)
   const deleteTicket = async (ticketId) => {
-    if (!confirm("Are you sure you want to delete this record?")) return;
     try {
       await deleteDoc(doc(db, 'maintenance_tickets', ticketId));
+      console.log("Ticket deleted:", ticketId);
     } catch (err) {
-      console.error("Error deleting:", err);
+      console.error("Error deleting ticket:", err);
+      alert("Error deleting ticket. Please try again.");
     }
   };
 
+  const deleteSchedule = async (scheduleId) => {
+    if (!confirm("Are you sure you want to delete this schedule?")) return;
+    try {
+      await deleteDoc(doc(db, 'scheduled_tasks', scheduleId));
+      setScheduledTasks(prev => prev.filter(s => s.id !== scheduleId));
+    } catch (error) {
+      console.error('Error deleting schedule:', error);
+    }
+  };
+
+  // Basic UI render - staff view only for now, admin view stripped down
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc', paddingBottom: '80px' }}>
-      <nav style={{ backgroundColor: 'white', borderBottom: '1px solid #e2e8f0', position: 'sticky', top: 0, zIndex: 10, boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)' }}>
+      <nav style={{
+        backgroundColor: 'white',
+        borderBottom: '1px solid #e2e8f0',
+        position: 'sticky',
+        top: 0,
+        zIndex: 10,
+        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+      }}>
         <div style={{ maxWidth: '1024px', margin: '0 auto', padding: '12px 16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="nav-content">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{ backgroundColor: '#4f46e5', padding: '6px', borderRadius: '8px' }}>
+              <div style={{
+                backgroundColor: '#4f46e5',
+                padding: '6px',
+                borderRadius: '8px'
+              }}>
                 <Wrench style={{ height: '20px', width: '20px', color: 'white' }} />
               </div>
               <h1 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e293b' }}>
                 Al Fajer <span style={{ color: '#4f46e5' }}>Support & Maintenance</span>
               </h1>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              {isAuthenticated && !userDataLoading && (
-                <div style={{ display: 'flex', backgroundColor: '#f8fafc', padding: '4px', borderRadius: '8px' }}>
-                  {Object.values(ROLES).map((role) => (
-                    <button key={role} onClick={() => setActiveRole(role)} style={{ padding: '6px 12px', fontSize: '12px', fontWeight: '500', borderRadius: '6px', backgroundColor: activeRole === role ? 'white' : 'transparent', color: activeRole === role ? '#4f46e5' : '#64748b', boxShadow: activeRole === role ? '0 1px 3px 0 rgba(0, 0, 0, 0.1)' : 'none', border: 'none', cursor: 'pointer' }}>
-                      {role}
+
+            {/* Navigation Menu - shows when authenticated */}
+            {isAuthenticated && (
+              <div className="nav-auth-section">
+
+                {/* Role Selector */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '14px', color: '#64748b', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <span style={{ fontWeight: '500' }} className="hide-on-mobile">Current Role:</span>
+                  <div className="nav-role-selector">
+                    <button
+                      onClick={() => setActiveRole(ROLES.STAFF)}
+                      disabled={activeRole === ROLES.STAFF}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #d1d5db',
+                        backgroundColor: activeRole === ROLES.STAFF ? '#4f46e5' : 'transparent',
+                        color: activeRole === ROLES.STAFF ? 'white' : '#64748b',
+                        fontSize: '12px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        opacity: activeRole === ROLES.STAFF ? 1 : 0.7
+                      }}
+                    >
+                      Staff/Teacher
                     </button>
-                  ))}
+                    <button
+                      onClick={() => setActiveRole(ROLES.MAINTENANCE)}
+                      disabled={activeRole === ROLES.MAINTENANCE}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #d1d5db',
+                        backgroundColor: activeRole === ROLES.MAINTENANCE ? '#4f46e5' : 'transparent',
+                        color: activeRole === ROLES.MAINTENANCE ? 'white' : '#64748b',
+                        fontSize: '12px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        opacity: activeRole === ROLES.MAINTENANCE ? 1 : 0.7
+                      }}
+                    >
+                      Maintenance Team
+                    </button>
+                    <button
+                      onClick={() => setActiveRole(ROLES.ADMIN)}
+                      disabled={activeRole === ROLES.ADMIN || !userData?.viewAll}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #d1d5db',
+                        backgroundColor: activeRole === ROLES.ADMIN ? '#4f46e5' : 'transparent',
+                        color: activeRole === ROLES.ADMIN ? 'white' : '#64748b',
+                        fontSize: '12px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        opacity: (activeRole === ROLES.ADMIN || !userData?.viewAll) ? 1 : 0.7
+                      }}
+                      title={!userData?.viewAll ? "Admin access requires special privileges" : ""}
+                    >
+                      Head Management/HR
+                    </button>
+                  </div>
                 </div>
-              )}
-              <button onClick={isAuthenticated ? () => signOutUser() : () => setShowLoginModal(true)} style={styles.btnPrimary}>
-                {isAuthenticated ? <><LogOut style={{ height: '16px', width: '16px' }} /> Logout</> : <><LogIn style={{ height: '16px', width: '16px' }} /> Login</>}
-              </button>
-            </div>
+
+                {/* User Info */}
+                <div style={{ fontSize: '13px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Users style={{ height: '16px', width: '16px' }} />
+                  <span className="hide-on-mobile">{userData?.email?.split('@')[0] || 'User'}</span>
+                </div>
+
+                {/* Administration Control - only for admins */}
+                {userData?.viewAll && (
+                  <div className="hide-on-mobile" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <ShieldAlert style={{ height: '16px', width: '16px', color: '#4f46e5' }} />
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#4f46e5' }}>Admin</span>
+                    <span style={{ fontSize: '11px', color: '#64748b', backgroundColor: 'white', padding: '2px 8px', borderRadius: '50px' }}>
+                      {tickets.length}
+                    </span>
+                  </div>
+                )}
+
+                {/* Logout Button */}
+                <button
+                  onClick={() => signOutUser()}
+                  style={{
+                    backgroundColor: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <LogOut style={{ height: '16px', width: '16px' }} />
+                  Logout
+                </button>
+              </div>
+            )}
+
+            {/* Login Button - when not authenticated */}
+            {!isAuthenticated && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <button
+                  onClick={() => setShowLoginModal(true)}
+                  style={{
+                    backgroundColor: '#4f46e5',
+                    color: 'white',
+                    border: 'none',
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <LogIn style={{ height: '16px', width: '16px' }} />
+                  Login
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </nav>
@@ -1220,639 +1023,89 @@ const handleCompleteTask = async (ticketId, technicianName, completionImageUrl =
       <main style={{ maxWidth: '1024px', margin: '0 auto', padding: '32px 16px' }}>
         <div style={{ marginBottom: '32px' }}>
           <h1 style={{ fontSize: '28px', fontWeight: 'bold', color: '#1e293b', marginBottom: '8px' }}>
-            {isAuthenticated ? (activeRole === ROLES.STAFF ? "Welcome, Staff Member" : activeRole === ROLES.MAINTENANCE ? "Maintenance Dashboard" : "Administration Control") : "Welcome to Al Fajer Support & Maintenance"}
+            Welcome to Al Fajer Support & Maintenance
           </h1>
-          {!isAuthenticated && <p style={{ color: '#64748b' }}>Report maintenance issues anonymously or login for full access.</p>}
+          <p style={{ color: '#64748b' }}>
+            {isAuthenticated 
+              ? 'Professional maintenance management system with advanced scheduling'
+              : 'Report maintenance issues anonymously or login for full access.'}
+          </p>
         </div>
 
-        {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '256px' }}>
-            <div style={{ border: '4px solid #e2e8f0', borderTop: '4px solid #4f46e5', borderRadius: '50%', width: '32px', height: '32px', animation: 'spin 1s linear infinite' }}></div>
-          </div>
-        ) : (
-          <>
-            {/* Staff View - Report Form */}
-            {(!isAuthenticated || activeRole === ROLES.STAFF) && (
-              <div style={styles.card}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                  <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Megaphone style={{ height: '20px', width: '20px', color: '#4f46e5' }} /> Report Issue
-                  </h2>
-                  <button onClick={() => setIsFormOpen(!isFormOpen)} style={styles.btnPrimary}>
-                    {isFormOpen ? "Cancel" : <><Plus style={{ height: '16px', width: '16px' }} /> New Report</>}
-                  </button>
-                </div>
-                {isFormOpen && <ReportForm user={user} onSuccess={() => setIsFormOpen(false)} />}
+        {/* Anonymous Report Form - for non-logged-in visitors */}
+        {!isAuthenticated && (
+          <div style={{
+            backgroundColor: 'white',
+            padding: '24px',
+            borderRadius: '12px',
+            boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+            border: '1px solid #e2e8f0',
+            marginBottom: '24px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <div style={{ backgroundColor: '#4f46e5', padding: '8px', borderRadius: '8px' }}>
+                <Megaphone style={{ height: '20px', width: '20px', color: 'white' }} />
               </div>
-            )}
-
-            {/* Maintenance View */}
-            {isAuthenticated && !userDataLoading && activeRole === ROLES.MAINTENANCE && (
-              <div style={styles.card}>
-                <div style={{ padding: '16px', borderBottom: '1px solid #f1f5f9', backgroundColor: '#f8fafc', borderRadius: '12px 12px 0 0', marginTop: '-24px', marginLeft: '-24px', marginRight: '-24px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                    <h3 style={{ fontWeight: 'bold', color: '#475569', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Wrench style={{ height: '20px', width: '20px', color: '#64748b' }} /> Task Queue
-                    </h3>
-                    <div style={{ display: 'flex', gap: '12px', fontSize: '14px' }}>
-                      <select
-                        value={filterCriteria.priority}
-                        onChange={(e) => setFilterCriteria({ ...filterCriteria, priority: e.target.value })}
-                        style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #d1d5db', fontSize: '12px' }}
-                      >
-                        <option value="all">All Priorities</option>
-                        <option value="critical_only">Critical Only</option>
-                        <option value="high_priority">High & Critical</option>
-                        <option value="normal">Normal & Low</option>
-                      </select>
-                      <select
-                        value={filterCriteria.status}
-                        onChange={(e) => setFilterCriteria({ ...filterCriteria, status: e.target.value })}
-                        style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #d1d5db', fontSize: '12px' }}
-                      >
-                        <option value="all">All Tasks</option>
-                        <option value="open">Open Only</option>
-                        <option value="in_progress">In Progress</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Table View - Keep filters at top, replace cards with table */}
-                <div>
-                  <table style={{ width: '100%', fontSize: '14px', textAlign: 'left', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr style={{ backgroundColor: '#f8fafc' }}>
-                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Category / Location</th>
-                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Priority</th>
-                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Status</th>
-                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Reported</th>
-                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(() => {
-                        // Apply filters to tickets
-                        let filteredTickets = tickets.filter(t => t.status !== 'resolved');
-
-                        // Priority filter
-                        if (filterCriteria.priority === 'critical_only') {
-                          filteredTickets = filteredTickets.filter(t => t.priority === 'critical');
-                        } else if (filterCriteria.priority === 'high_priority') {
-                          filteredTickets = filteredTickets.filter(t => t.priority === 'critical' || t.priority === 'high');
-                        } else if (filterCriteria.priority === 'normal') {
-                          filteredTickets = filteredTickets.filter(t => t.priority === 'low' || t.priority === 'medium');
-                        }
-
-                        // Status filter
-                        if (filterCriteria.status === 'open') {
-                          filteredTickets = filteredTickets.filter(t => t.status === 'open');
-                        } else if (filterCriteria.status === 'in_progress') {
-                          filteredTickets = filteredTickets.filter(t => t.status === 'in_progress');
-                        }
-
-                        return filteredTickets.map(ticket => (
-                          <tr key={ticket.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                            <td style={{ padding: '12px 16px' }}>
-                              <div style={{ fontWeight: '500', color: '#1e293b' }}>{ticket.category}</div>
-                              <div style={{ fontSize: '12px', color: '#64748b' }}>{ticket.location}</div>
-                              {ticket.warnings > 0 && <div style={{ fontSize: '10px', color: '#dc2626', fontWeight: 'bold', marginTop: '2px' }}>⚠️ HR Warning ({ticket.warnings})</div>}
-                            </td>
-                            <td style={{ padding: '12px 16px' }}>
-                              <PriorityBadge priority={ticket.priority} />
-                            </td>
-                            <td style={{ padding: '12px 16px' }}>
-                              <StatusBadge status={ticket.status} />
-                            </td>
-                            <td style={{ padding: '12px 16px', color: '#64748b' }}>
-                              {ticket.createdAt.toLocaleDateString()}
-                            </td>
-                            <td style={{ padding: '12px 16px' }}>
-                              <div style={{ display: 'flex', gap: '8px' }}>
-                                {ticket.status === 'open' && (
-                                  <button onClick={() => updateStatus(ticket.id, 'in_progress')} style={styles.btnYellow}>
-                                    Start Work
-                                  </button>
-                                )}
-                                {ticket.status === 'in_progress' && (
-                                  <button onClick={() => { setSelectedTicket(ticket); setCompletionModalOpen(true); }} style={styles.btnGreen}>
-                                    <CheckCircle style={{ height: '16px', width: '16px' }} /> Complete
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ));
-                      })()}
-                      {tickets.filter(t => t.status !== 'resolved').length === 0 && (
-                        <tr>
-                          <td colSpan="5" style={{ padding: '32px', textAlign: 'center', color: '#64748b' }}>
-                            No active tasks. Good job!
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Admin View with Tabs */}
-            {isAuthenticated && !userDataLoading && activeRole === ROLES.ADMIN && (
               <div>
-                {/* Admin Tab Navigation */}
-                <div style={{ marginBottom: '24px', borderBottom: '1px solid #e2e8f0' }}>
-                  <nav style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      onClick={() => setActiveAdminTab('overview')}
-                      style={{
-                        padding: '12px 20px',
-                        fontSize: '14px',
-                        fontWeight: '500',
-                        borderBottom: activeAdminTab === 'overview' ? '2px solid #4f46e5' : '2px solid transparent',
-                        color: activeAdminTab === 'overview' ? '#4f46e5' : '#64748b',
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        borderRadius: '4px 4px 0 0',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Overview
-                    </button>
-                    <button
-                      onClick={() => setActiveAdminTab('users')}
-                      style={{
-                        padding: '12px 20px',
-                        fontSize: '14px',
-                        fontWeight: '500',
-                        borderBottom: activeAdminTab === 'users' ? '2px solid #4f46e5' : '2px solid transparent',
-                        color: activeAdminTab === 'users' ? '#4f46e5' : '#64748b',
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        borderRadius: '4px 4px 0 0',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <Users style={{ height: '14px', width: '14px' }} />
-                      Users ({users.length})
-                    </button>
-                    <button
-                      onClick={() => setActiveAdminTab('schedules')}
-                      style={{
-                        padding: '12px 20px',
-                        fontSize: '14px',
-                        fontWeight: '500',
-                        borderBottom: activeAdminTab === 'schedules' ? '2px solid #4f46e5' : '2px solid transparent',
-                        color: activeAdminTab === 'schedules' ? '#4f46e5' : '#64748b',
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        borderRadius: '4px 4px 0 0',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <Calendar style={{ height: '14px', width: '14px' }} />
-                      Schedules ({scheduledTasks.length})
-                    </button>
-                    <button
-                      onClick={() => setActiveAdminTab('reports')}
-                      style={{
-                        padding: '12px 20px',
-                        fontSize: '14px',
-                        fontWeight: '500',
-                        borderBottom: activeAdminTab === 'reports' ? '2px solid #4f46e5' : '2px solid transparent',
-                        color: activeAdminTab === 'reports' ? '#4f46e5' : '#64748b',
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        borderRadius: '4px 4px 0 0',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      📊 Reports
-                    </button>
-                  </nav>
-                </div>
-
-                {/* Overview Tab */}
-                {activeAdminTab === 'overview' && (
-                  <>
-                    <div style={{ backgroundColor: '#1e293b', color: 'white', padding: '24px', borderRadius: '12px', marginBottom: '24px' }}>
-                      <h2 style={{ fontSize: '24px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}><ShieldAlert style={{ height: '24px', width: '24px' }} /> Executive Oversight</h2>
-                      <p style={{ color: '#94a3b8' }}>Monitor maintenance performance.</p>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginTop: '24px' }}>
-                        <div style={{ backgroundColor: 'rgba(71, 85, 105, 0.5)', padding: '16px', borderRadius: '8px' }}><div style={{ fontSize: '32px', fontWeight: 'bold', color: '#f87171' }}>{tickets.filter(t => t.priority === 'critical' && t.status !== 'resolved').length}</div><div style={{ fontSize: '14px', color: '#94a3b8' }}>Critical</div></div>
-                        <div style={{ backgroundColor: 'rgba(71, 85, 105, 0.5)', padding: '16px', borderRadius: '8px' }}><div style={{ fontSize: '32px', fontWeight: 'bold', color: 'white' }}>{tickets.filter(t => t.status === 'open').length}</div><div style={{ fontSize: '14px', color: '#94a3b8' }}>Backlog</div></div>
-                        <div style={{ backgroundColor: 'rgba(71, 85, 105, 0.5)', padding: '16px', borderRadius: '8px' }}><div style={{ fontSize: '32px', fontWeight: 'bold', color: '#facc15' }}>{tickets.filter(t => t.status === 'in_progress').length}</div><div style={{ fontSize: '14px', color: '#94a3b8' }}>In Progress</div></div>
-                        <div style={{ backgroundColor: 'rgba(71, 85, 105, 0.5)', padding: '16px', borderRadius: '8px' }}><div style={{ fontSize: '32px', fontWeight: 'bold', color: '#4ade80' }}>{tickets.filter(t => t.status === 'resolved').length}</div><div style={{ fontSize: '14px', color: '#94a3b8' }}>Resolved</div></div>
-                      </div>
-                    </div>
-                    <div style={styles.card}>
-                      <table style={{ width: '100%', fontSize: '14px', textAlign: 'left', borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr style={{ backgroundColor: '#f8fafc' }}>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Category / Location</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Status</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Reported</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Completion Details</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {tickets.map(ticket => (
-                            <tr key={ticket.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                              <td style={{ padding: '12px 16px' }}>
-                                <div style={{ fontWeight: '500', color: '#1e293b' }}>{ticket.category}</div>
-                                <div style={{ fontSize: '12px', color: '#64748b' }}>{ticket.location}</div>
-                                {ticket.completionImageUrl && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
-                                    <ImageIcon style={{ height: '12px', width: '12px', color: '#059669' }} />
-                                    <span style={{ fontSize: '10px', color: '#059669', fontWeight: '500' }}>Has completion photo</span>
-                                  </div>
-                                )}
-                              </td>
-                              <td style={{ padding: '12px 16px' }}><StatusBadge status={ticket.status} /></td>
-                              <td style={{ padding: '12px 16px', color: '#64748b' }}>
-                                <div>{ticket.createdAt.toLocaleDateString()}</div>
-                                <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                                  {ticket.createdAt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                </div>
-                              </td>
-                              <td style={{ padding: '12px 16px', maxWidth: '300px' }}>
-                                {ticket.status === 'resolved' ? (
-                                  <div style={{ fontSize: '13px' }}>
-                                    {ticket.resolvedBy && (
-                                      <div style={{ color: '#374151', fontWeight: '500', marginBottom: '4px' }}>
-                                        🔧 {ticket.resolvedBy}
-                                      </div>
-                                    )}
-                                    {ticket.completedBy && (
-                                      <div style={{ color: '#64748b', fontSize: '12px', marginBottom: '4px' }}>
-                                        Marked by: {typeof ticket.completedBy === 'string' ? ticket.completedBy : 'System'}
-                                      </div>
-                                    )}
-                                    {ticket.resolvedAt && (
-                                      <div style={{ color: '#64748b', fontSize: '12px' }}>
-                                        ✅ {ticket.resolvedAt.toLocaleDateString()} {ticket.resolvedAt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                      </div>
-                                    )}
-                                    {ticket.completionImageUrl && (
-                                      <button
-                                        onClick={() => openImageModal(ticket.completionImageUrl)}
-                                        style={{
-                                          marginTop: '6px',
-                                          padding: '4px 8px',
-                                          backgroundColor: '#dbeafe',
-                                          color: '#3b82f6',
-                                          border: 'none',
-                                          borderRadius: '4px',
-                                          fontSize: '11px',
-                                          cursor: 'pointer',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          gap: '4px'
-                                        }}
-                                      >
-                                        <ImageIcon style={{ height: '12px', width: '12px' }} />
-                                        View Completion Photo
-                                      </button>
-                                    )}
-                                  </div>
-                                ) : ticket.status === 'in_progress' && ticket.startedAt ? (
-                                  <div style={{ fontSize: '12px', color: '#d97706' }}>
-                                    Started: {ticket.startedAt.toLocaleDateString()} {ticket.startedAt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                  </div>
-                                ) : (
-                                  <span style={{ color: '#94a3b8', fontSize: '12px', fontStyle: 'italic' }}>
-                                    Not yet completed
-                                  </span>
-                                )}
-                              </td>
-                              <td style={{ padding: '12px 16px' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  {ticket.status !== 'resolved' && (
-                                    <button onClick={() => issueWarning(ticket.id, ticket.warnings)} style={{ color: '#ea580c', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', border: '1px solid #fed7aa', backgroundColor: 'transparent', cursor: 'pointer' }}>
-                                      <AlertTriangle style={{ height: '12px', width: '12px' }} /> Escalate
-                                    </button>
-                                  )}
-                                  <button onClick={() => deleteTicket(ticket.id)} style={{ color: '#94a3b8', padding: '4px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer' }}>
-                                    <Trash2 style={{ height: '16px', width: '16px' }} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )}
-
-                {/* Users Tab */}
-                {activeAdminTab === 'users' && (
-                  <div style={styles.card}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                      <h3 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <Users style={{ height: '20px', width: '20px', color: '#4f46e5' }} />
-                        User Management
-                      </h3>
-                    </div>
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', fontSize: '14px', textAlign: 'left', borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr style={{ backgroundColor: '#f8fafc' }}>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Email</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Role</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Status</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Registered</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {users.map(user => (
-                              <tr key={user.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                <td style={{ padding: '12px 16px', fontWeight: '500', color: '#1e293b' }}>{user.email}</td>
-                                <td style={{ padding: '12px 16px' }}>
-                                  <select
-                                    value={user.role || 'staff'}
-                                    onChange={(e) => updateUserData(user.id, { role: e.target.value })}
-                                    style={styles.select}
-                                  >
-                                    <option value="staff">Staff</option>
-                                    <option value="maintenance">Maintenance</option>
-                                    <option value="admin">Admin</option>
-                                  </select>
-                                </td>
-                                <td style={{ padding: '12px 16px' }}>
-                                  <span style={{
-                                    padding: '2px 8px',
-                                    borderRadius: '9999px',
-                                    fontSize: '12px',
-                                    fontWeight: '500',
-                                    backgroundColor: user.status === 'approved' ? '#d1fae5' : user.status === 'blocked' ? '#fee2e2' : '#fef3c7',
-                                    color: user.status === 'approved' ? '#059669' : user.status === 'blocked' ? '#dc2626' : '#d97706'
-                                  }}>
-                                    {user.status || 'pending'}
-                                  </span>
-                                </td>
-                                <td style={{ padding: '12px 16px', color: '#64748b' }}>
-                                  {user.createdAt?.toDate?.() ? user.createdAt.toDate().toLocaleDateString() : 'N/A'}
-                                </td>
-                                <td style={{ padding: '12px 16px' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <select
-                                      value={user.status || 'pending'}
-                                      onChange={(e) => updateUserData(user.id, { status: e.target.value })}
-                                      style={{ ...styles.select, fontSize: '12px', padding: '4px 8px', width: 'auto' }}
-                                    >
-                                      <option value="approved">Approved</option>
-                                      <option value="blocked">Blocked</option>
-                                    </select>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
-                                      <input
-                                        type="checkbox"
-                                        checked={user.viewAll || false}
-                                        onChange={(e) => updateUserData(user.id, { viewAll: e.target.checked })}
-                                      />
-                                      View All
-                                    </label>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          {users.length === 0 && (
-                            <tr>
-                              <td colSpan="5" style={{ padding: '32px', textAlign: 'center', color: '#64748b' }}>
-                                No users registered yet.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Schedules Tab */}
-                {activeAdminTab === 'schedules' && (
-                  <div style={styles.card}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                      <h3 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <Calendar style={{ height: '20px', width: '20px', color: '#4f46e5' }} />
-                        Task Scheduling
-                      </h3>
-                      <button onClick={() => setShowScheduleForm(true)} style={styles.btnPrimary}>
-                        <Plus style={{ height: '14px', width: '14px' }} /> Create Schedule
-                      </button>
-                    </div>
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', fontSize: '14px', textAlign: 'left', borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr style={{ backgroundColor: '#f8fafc' }}>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Task</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Location</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Frequency</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Next Due</th>
-                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {scheduledTasks.map(schedule => (
-                            <tr key={schedule.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                              <td style={{ padding: '12px 16px' }}>
-                                <div style={{ fontWeight: '500', color: '#1e293b' }}>{schedule.category}</div>
-                                <div style={{ fontSize: '12px', color: '#64748b' }}>{schedule.description}</div>
-                              </td>
-                              <td style={{ padding: '12px 16px', color: '#64748b' }}>
-                                {schedule.location}
-                              </td>
-                              <td style={{ padding: '12px 16px', color: '#64748b' }}>
-                                Every {schedule.frequencyDays} days
-                              </td>
-                              <td style={{ padding: '12px 16px' }}>
-                                <PriorityBadge priority={schedule.priority} />
-                                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
-                                  {schedule.nextRun ? schedule.nextRun.toLocaleDateString() : 'Due now'}
-                                </div>
-                              </td>
-                              <td style={{ padding: '12px 16px' }}>
-                                <button
-                                  onClick={() => deleteSchedule(schedule.id)}
-                                  style={{ color: '#dc2626', padding: '4px 8px', borderRadius: '4px', border: '1px solid #fecaca', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '12px' }}
-                                >
-                                  Delete
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                          {scheduledTasks.length === 0 && (
-                            <tr>
-                              <td colSpan="5" style={{ padding: '32px', textAlign: 'center', color: '#64748b' }}>
-                                No scheduled tasks created yet.<br />
-                                Create recurring maintenance tasks to never forget important inspections.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Reports Tab */}
-                {activeAdminTab === 'reports' && (
-                  <div style={styles.card}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                      <h3 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1e293b' }}>
-                        📊 Analytics & Reports
-                      </h3>
-                      <select style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
-                        <option value="30">Last 30 Days</option>
-                        <option value="90">Last 90 Days</option>
-                        <option value="365">Last Year</option>
-                      </select>
-                    </div>
-
-                    {/* Key Metrics Cards */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '32px' }}>
-                      <div style={{ backgroundColor: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1e293b', marginBottom: '4px' }}>{tickets.length}</div>
-                        <div style={{ fontSize: '14px', color: '#64748b' }}>Total Tickets</div>
-                      </div>
-                      <div style={{ backgroundColor: '#d1fae5', padding: '20px', borderRadius: '8px' }}>
-                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#059669', marginBottom: '4px' }}>{tickets.filter(t => t.status === 'resolved').length}</div>
-                        <div style={{ fontSize: '14px', color: '#64748b' }}>Resolved</div>
-                      </div>
-                      <div style={{ backgroundColor: '#fef3c7', padding: '20px', borderRadius: '8px' }}>
-                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#d97706', marginBottom: '4px' }}>{tickets.filter(t => t.status !== 'resolved').length}</div>
-                        <div style={{ fontSize: '14px', color: '#64748b' }}>Active</div>
-                      </div>
-                      <div style={{ backgroundColor: '#fee2e2', padding: '20px', borderRadius: '8px' }}>
-                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#dc2626', marginBottom: '4px' }}>{tickets.filter(t => t.priority === 'critical').length}</div>
-                        <div style={{ fontSize: '14px', color: '#64748b' }}>Critical Priority</div>
-                      </div>
-                    </div>
-
-                    {/* Reports Sections */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-                      {/* Issues by Category */}
-                      <div>
-                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>Issues by Category</h4>
-                        <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
-                          <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', fontSize: '14px', fontWeight: '500' }}>Category</div>
-                          {ISSUE_CATEGORIES.slice(0, 5).map(category => {
-                            const count = tickets.filter(t => t.category === category).length;
-                            return (
-                              <div key={category} style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
-                                <span style={{ fontSize: '14px', color: '#374151' }}>{category}</span>
-                                <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>{count}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Response Times */}
-                      <div>
-                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>Top Issue Locations</h4>
-                        <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
-                          <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', fontSize: '14px', fontWeight: '500' }}>Location</div>
-                          {LOCATIONS.slice(0, 5).map(location => {
-                            const count = tickets.filter(t => t.location === location).length;
-                            return (
-                              <div key={location} style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
-                                <span style={{ fontSize: '14px', color: '#374151' }}>{location}</span>
-                                <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>{count}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Quality Metrics */}
-                      <div>
-                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>Quality Metrics</h4>
-                        <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
-                          <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', fontSize: '14px', fontWeight: '500' }}>Metric</div>
-                          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ fontSize: '14px', color: '#374151' }}>Avg Response Time</span>
-                            <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>2.3 days</span>
-                          </div>
-                          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ fontSize: '14px', color: '#374151' }}>Resolution Rate</span>
-                            <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>
-                              {tickets.length > 0 ? Math.round((tickets.filter(t => t.status === 'resolved').length / tickets.length) * 100) : 0}%
-                            </span>
-                          </div>
-                          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ fontSize: '14px', color: '#374151' }}>Reopened Issues</span>
-                            <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>3</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Recent Activity */}
-                      <div>
-                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>Recent Completions</h4>
-                        <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
-                          <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', fontSize: '14px', fontWeight: '500' }}>Task & Completion Time</div>
-                          {tickets.filter(t => t.status === 'resolved').slice(0, 3).map(ticket => (
-                            <div key={ticket.id} style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0' }}>
-                              <div style={{ fontSize: '14px', color: '#374151', fontWeight: '500' }}>{ticket.category}</div>
-                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-                                Completed: {ticket.resolvedAt ? ticket.resolvedAt.toLocaleDateString() : 'Unknown'}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Export Button */}
-                    <div style={{ marginTop: '32px', textAlign: 'center' }}>
-                      <button style={styles.btnPrimary}>
-                        📊 Export Full Report
-                      </button>
-                    </div>
-                  </div>
-                )}
+                <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e293b' }}>Report Issue</h2>
+                <p style={{ fontSize: '14px', color: '#64748b' }}>Submit a new maintenance request</p>
               </div>
-            )}
-          </>
+            </div>
+            <ReportForm user={user} onSuccess={() => {}} />
+          </div>
+        )}
+
+        {/* Maintenance View - for maintenance technicians (job cards) */}
+        {isAuthenticated && activeRole === ROLES.MAINTENANCE && (
+          <MaintenanceView
+            tickets={tickets}
+            user={user}
+            userData={userData}
+          />
+        )}
+
+        {/* Admin View - for administrators (executive dashboard) */}
+        {isAuthenticated && activeRole === ROLES.ADMIN && (
+          <AdminView
+            tickets={tickets}
+            user={user}
+            userData={userData}
+            onCreateSchedule={() => setShowScheduleForm(true)}
+            onDeleteTicket={deleteTicket}
+          />
+        )}
+
+        {/* Staff Report Form - only for Staff role */}
+        {isAuthenticated && activeRole === ROLES.STAFF && (
+          <div style={{
+            backgroundColor: 'white',
+            padding: '24px',
+            borderRadius: '12px',
+            boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+            border: '1px solid #e2e8f0'
+          }}>
+            <ReportForm user={user} onSuccess={() => setIsFormOpen(false)} />
+          </div>
         )}
       </main>
 
-      <LoginModal isOpen={showLoginModal} onClose={() => setShowLoginModal(false)} />
-      <ImageModal isOpen={imageModalOpen} src={modalImageSrc} onClose={closeImageModal} />
-      <CompletionModal
-        isOpen={completionModalOpen}
-        onClose={() => {
-          setCompletionModalOpen(false);
-          setSelectedTicket(null);
-        }}
-        onComplete={handleCompleteTask}
-        ticket={selectedTicket}
-        user={user}
-      />
-      <ScheduleForm
-        isOpen={showScheduleForm}
-        onClose={() => setShowScheduleForm(false)}
-        onSubmit={createSchedule}
-      />
+      {/* Login Modal */}
+      {showLoginModal && (
+        <LoginModal
+          isOpen={showLoginModal}
+          onClose={() => setShowLoginModal(false)}
+        />
+      )}
 
-      <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
+      {/* Enhanced Schedule Modal */}
+      {showScheduleForm && (
+        <EnhancedScheduleForm
+          isOpen={showScheduleForm}
+          onClose={() => setShowScheduleForm(false)}
+          onSubmit={createSchedule}
+          user={user}
+        />
+      )}
     </div>
   );
 }
