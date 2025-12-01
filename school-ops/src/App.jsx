@@ -1175,49 +1175,82 @@ const handleCompleteTask = async (ticketId, technicianName) => {
                     </div>
                   </div>
                 </div>
+
+                {/* Table View - Keep filters at top, replace cards with table */}
                 <div>
-                  {(() => {
-                    // Apply filters to tickets
-                    let filteredTickets = tickets.filter(t => t.status !== 'resolved');
+                  <table style={{ width: '100%', fontSize: '14px', textAlign: 'left', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#f8fafc' }}>
+                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Category / Location</th>
+                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Priority</th>
+                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Status</th>
+                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Reported</th>
+                        <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        // Apply filters to tickets
+                        let filteredTickets = tickets.filter(t => t.status !== 'resolved');
 
-                    // Priority filter
-                    if (filterCriteria.priority === 'critical_only') {
-                      filteredTickets = filteredTickets.filter(t => t.priority === 'critical');
-                    } else if (filterCriteria.priority === 'high_priority') {
-                      filteredTickets = filteredTickets.filter(t => t.priority === 'critical' || t.priority === 'high');
-                    } else if (filterCriteria.priority === 'normal') {
-                      filteredTickets = filteredTickets.filter(t => t.priority === 'low' || t.priority === 'medium');
-                    }
+                        // Priority filter
+                        if (filterCriteria.priority === 'critical_only') {
+                          filteredTickets = filteredTickets.filter(t => t.priority === 'critical');
+                        } else if (filterCriteria.priority === 'high_priority') {
+                          filteredTickets = filteredTickets.filter(t => t.priority === 'critical' || t.priority === 'high');
+                        } else if (filterCriteria.priority === 'normal') {
+                          filteredTickets = filteredTickets.filter(t => t.priority === 'low' || t.priority === 'medium');
+                        }
 
-                    // Status filter
-                    if (filterCriteria.status === 'open') {
-                      filteredTickets = filteredTickets.filter(t => t.status === 'open');
-                    } else if (filterCriteria.status === 'in_progress') {
-                      filteredTickets = filteredTickets.filter(t => t.status === 'in_progress');
-                    }
+                        // Status filter
+                        if (filterCriteria.status === 'open') {
+                          filteredTickets = filteredTickets.filter(t => t.status === 'open');
+                        } else if (filterCriteria.status === 'in_progress') {
+                          filteredTickets = filteredTickets.filter(t => t.status === 'in_progress');
+                        }
 
-                    return filteredTickets.map(ticket => (
-                      <div key={ticket.id} style={{ padding: '16px', borderBottom: '1px solid #f1f5f9' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px' }}>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        return filteredTickets.map(ticket => (
+                          <tr key={ticket.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '12px 16px' }}>
+                              <div style={{ fontWeight: '500', color: '#1e293b' }}>{ticket.category}</div>
+                              <div style={{ fontSize: '12px', color: '#64748b' }}>{ticket.location}</div>
+                              {ticket.warnings > 0 && <div style={{ fontSize: '10px', color: '#dc2626', fontWeight: 'bold', marginTop: '2px' }}>⚠️ HR Warning ({ticket.warnings})</div>}
+                            </td>
+                            <td style={{ padding: '12px 16px' }}>
                               <PriorityBadge priority={ticket.priority} />
-                              {ticket.warnings > 0 && <span style={{ backgroundColor: '#fef2f2', color: '#dc2626', fontSize: '12px', padding: '2px 8px', borderRadius: '4px', border: '1px solid #fecaca', fontWeight: 'bold' }}><AlertTriangle style={{ height: '12px', width: '12px', display: 'inline' }} /> HR Warning ({ticket.warnings})</span>}
-                            </div>
-                            <h4 style={{ fontWeight: '500', color: '#1e293b' }}>{ticket.category}</h4>
-                            <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '8px' }}>{ticket.location} - {ticket.description}</p>
-                            {ticket.imageUrl && <ImageThumbnail src={ticket.imageUrl} onClick={openImageModal} />}
-                            <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '8px' }}>Reported: {ticket.createdAt.toLocaleString()}</p>
-                          </div>
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            {ticket.status === 'open' && <button onClick={() => updateStatus(ticket.id, 'in_progress')} style={styles.btnYellow}>Start Work</button>}
-                            {ticket.status === 'in_progress' && <button onClick={() => { setSelectedTicket(ticket); setCompletionModalOpen(true); }} style={styles.btnGreen}><CheckCircle style={{ height: '16px', width: '16px' }} /> Complete</button>}
-                          </div>
-                        </div>
-                      </div>
-                    ));
-                  })()}
-                  {tickets.filter(t => t.status !== 'resolved').length === 0 && <div style={{ padding: '32px', textAlign: 'center', color: '#64748b' }}>No active tasks. Good job!</div>}
+                            </td>
+                            <td style={{ padding: '12px 16px' }}>
+                              <StatusBadge status={ticket.status} />
+                            </td>
+                            <td style={{ padding: '12px 16px', color: '#64748b' }}>
+                              {ticket.createdAt.toLocaleDateString()}
+                            </td>
+                            <td style={{ padding: '12px 16px' }}>
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                {ticket.status === 'open' && (
+                                  <button onClick={() => updateStatus(ticket.id, 'in_progress')} style={styles.btnYellow}>
+                                    Start Work
+                                  </button>
+                                )}
+                                {ticket.status === 'in_progress' && (
+                                  <button onClick={() => { setSelectedTicket(ticket); setCompletionModalOpen(true); }} style={styles.btnGreen}>
+                                    <CheckCircle style={{ height: '16px', width: '16px' }} /> Complete
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ));
+                      })()}
+                      {tickets.filter(t => t.status !== 'resolved').length === 0 && (
+                        <tr>
+                          <td colSpan="5" style={{ padding: '32px', textAlign: 'center', color: '#64748b' }}>
+                            No active tasks. Good job!
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
