@@ -30,7 +30,7 @@ import {
 
 // Import Firebase services
 import { db } from './firebase';
-import { signInAsAnonymous, signInWithCredentials, signOutUser, onAuthStateChange, getUserData, updateUserData } from './auth';
+import { signInAsAnonymous, signInWithCredentials, signOutUser, onAuthStateChange, getUserData, updateUserData, initializeAuth } from './auth';
 import { compressImage, uploadImage } from './storage';
 
 // --- Constants ---
@@ -986,9 +986,17 @@ export default function App() {
   };
 
   useEffect(() => {
-    console.log("Starting anonymous sign-in...");
-    signInAsAnonymous().then(result => {
-      console.log("Anonymous sign-in result:", result);
+    // Initialize Firebase auth persistence first
+    console.log("Initializing Firebase auth persistence...");
+    initializeAuth().then(authResult => {
+      console.log("Auth persistence initialized:", authResult);
+
+      console.log("Starting anonymous sign-in...");
+      signInAsAnonymous().then(result => {
+        console.log("Anonymous sign-in result:", result);
+      });
+    }).catch(error => {
+      console.error("Failed to initialize auth persistence:", error);
     });
 
     const unsubscribe = onAuthStateChange(async (u) => {
@@ -1453,6 +1461,7 @@ const handleCompleteTask = async (ticketId, technicianName, completionImageUrl =
                             <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Category / Location</th>
                             <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Status</th>
                             <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Reported</th>
+                            <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Completion Details</th>
                             <th style={{ padding: '12px 16px', color: '#64748b', fontWeight: '500' }}>Actions</th>
                           </tr>
                         </thead>
@@ -1462,9 +1471,70 @@ const handleCompleteTask = async (ticketId, technicianName, completionImageUrl =
                               <td style={{ padding: '12px 16px' }}>
                                 <div style={{ fontWeight: '500', color: '#1e293b' }}>{ticket.category}</div>
                                 <div style={{ fontSize: '12px', color: '#64748b' }}>{ticket.location}</div>
+                                {ticket.completionImageUrl && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                                    <ImageIcon style={{ height: '12px', width: '12px', color: '#059669' }} />
+                                    <span style={{ fontSize: '10px', color: '#059669', fontWeight: '500' }}>Has completion photo</span>
+                                  </div>
+                                )}
                               </td>
                               <td style={{ padding: '12px 16px' }}><StatusBadge status={ticket.status} /></td>
-                              <td style={{ padding: '12px 16px', color: '#64748b' }}>{ticket.createdAt.toLocaleDateString()}</td>
+                              <td style={{ padding: '12px 16px', color: '#64748b' }}>
+                                <div>{ticket.createdAt.toLocaleDateString()}</div>
+                                <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                                  {ticket.createdAt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                </div>
+                              </td>
+                              <td style={{ padding: '12px 16px', maxWidth: '300px' }}>
+                                {ticket.status === 'resolved' ? (
+                                  <div style={{ fontSize: '13px' }}>
+                                    {ticket.resolvedBy && (
+                                      <div style={{ color: '#374151', fontWeight: '500', marginBottom: '4px' }}>
+                                        🔧 {ticket.resolvedBy}
+                                      </div>
+                                    )}
+                                    {ticket.completedBy && (
+                                      <div style={{ color: '#64748b', fontSize: '12px', marginBottom: '4px' }}>
+                                        Marked by: {typeof ticket.completedBy === 'string' ? ticket.completedBy : 'System'}
+                                      </div>
+                                    )}
+                                    {ticket.resolvedAt && (
+                                      <div style={{ color: '#64748b', fontSize: '12px' }}>
+                                        ✅ {ticket.resolvedAt.toLocaleDateString()} {ticket.resolvedAt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                      </div>
+                                    )}
+                                    {ticket.completionImageUrl && (
+                                      <button
+                                        onClick={() => openImageModal(ticket.completionImageUrl)}
+                                        style={{
+                                          marginTop: '6px',
+                                          padding: '4px 8px',
+                                          backgroundColor: '#dbeafe',
+                                          color: '#3b82f6',
+                                          border: 'none',
+                                          borderRadius: '4px',
+                                          fontSize: '11px',
+                                          cursor: 'pointer',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '4px'
+                                        }}
+                                      >
+                                        <ImageIcon style={{ height: '12px', width: '12px' }} />
+                                        View Completion Photo
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : ticket.status === 'in_progress' && ticket.startedAt ? (
+                                  <div style={{ fontSize: '12px', color: '#d97706' }}>
+                                    Started: {ticket.startedAt.toLocaleDateString()} {ticket.startedAt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#94a3b8', fontSize: '12px', fontStyle: 'italic' }}>
+                                    Not yet completed
+                                  </span>
+                                )}
+                              </td>
                               <td style={{ padding: '12px 16px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                   {ticket.status !== 'resolved' && (
