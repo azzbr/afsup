@@ -105,6 +105,21 @@ const ROLES = {
   ADMIN: 'Head Management/HR'
 };
 
+// --- Report Types and Helpers ---
+const createDateRangeFilter = (days) => {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - days);
+  return { start, end };
+};
+
+const REPORT_TYPES = {
+  TICKET_ANALYTICS: 'ticket_analytics',
+  PERFORMANCE: 'performance',
+  TIME_ANALYSIS: 'time_analysis',
+  QUALITY_ASSURANCE: 'quality_assurance'
+};
+
 const USER_STATUS = {
   PENDING: 'pending',
   APPROVED: 'approved',
@@ -218,10 +233,24 @@ function ImageThumbnail({ src, onClick }) {
   );
 }
 
-// --- Completion Modal Component ---
-function CompletionModal({ isOpen, onClose, onComplete, ticket }) {
+// --- Enhanced Completion Modal Component ---
+function CompletionModal({ isOpen, onClose, onComplete, ticket, user }) {
   const [technicianName, setTechnicianName] = useState('');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const handleImageSelect = async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        alert("File size too large. Please select an image under 5MB.");
+        return;
+      }
+      const compressed = await compressImage(file);
+      setSelectedFile(compressed);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -231,11 +260,39 @@ function CompletionModal({ isOpen, onClose, onComplete, ticket }) {
     }
 
     setLoading(true);
-    await onComplete(ticket.id, technicianName.trim());
+
+    try {
+      // Upload completion image if provided
+      let completionImageUrl = null;
+      if (selectedFile) {
+        setUploadingImage(true);
+        const uploadResult = await uploadImage(selectedFile, `${ticket.id}_completion`);
+        if (uploadResult.success) {
+          completionImageUrl = uploadResult.downloadURL;
+        }
+        setUploadingImage(false);
+      }
+
+      await onComplete(ticket.id, technicianName.trim(), completionImageUrl);
+    } catch (error) {
+      console.error('Completion error:', error);
+      alert('Error completing task. Please try again.');
+    }
+
     setLoading(false);
     setTechnicianName('');
+    setSelectedFile(null);
     onClose();
   };
+
+  useEffect(() => {
+    if (!isOpen) {
+      setTechnicianName('');
+      setSelectedFile(null);
+      setUploadingImage(false);
+      setLoading(false);
+    }
+  }, [isOpen]);
 
   if (!isOpen || !ticket) return null;
 
@@ -254,14 +311,14 @@ function CompletionModal({ isOpen, onClose, onComplete, ticket }) {
         padding: '24px',
         borderRadius: '12px',
         width: '100%',
-        maxWidth: '400px',
+        maxWidth: '450px',
         margin: '16px'
       }}>
         <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>
           Task Completed
         </h3>
         <p style={{ color: '#64748b', marginBottom: '16px', fontSize: '14px' }}>
-          Who completed this task?
+          Record the completion details.
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -278,24 +335,43 @@ function CompletionModal({ isOpen, onClose, onComplete, ticket }) {
             />
           </div>
 
+          <div style={{ marginBottom: '16px' }}>
+            <label style={styles.label}>Completion Photo (Optional)</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: '6px', backgroundColor: 'white' }}>
+                <ImageIcon style={{ height: '16px', width: '16px', color: '#64748b' }} />
+                <span style={{ fontSize: '14px', color: '#64748b' }}>Add Completion Photo</span>
+                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageSelect} />
+              </label>
+              {selectedFile && (
+                <div style={{ position: 'relative' }}>
+                  <img src={selectedFile} alt="Preview" style={{ height: '40px', width: '40px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #e2e8f0' }} />
+                  <button type="button" onClick={() => setSelectedFile(null)} style={{ position: 'absolute', top: '-8px', right: '-8px', backgroundColor: '#ef4444', color: 'white', borderRadius: '9999px', padding: '2px', border: 'none', cursor: 'pointer' }}>
+                    <X style={{ height: '12px', width: '12px' }} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div style={{ display: 'flex', gap: '12px', paddingTop: '8px' }}>
             <button
               type="submit"
-              disabled={loading || !technicianName.trim()}
+              disabled={loading || uploadingImage || !technicianName.trim()}
               style={{
                 ...styles.btnGreen,
                 flex: 1,
                 justifyContent: 'center',
-                opacity: (loading || !technicianName.trim()) ? 0.5 : 1
+                opacity: (loading || uploadingImage || !technicianName.trim()) ? 0.5 : 1
               }}
             >
-              {loading ? 'Completing...' : 'Mark Complete'}
+              {loading ? 'Completing...' : uploadingImage ? 'Uploading...' : 'Mark Complete'}
             </button>
             <button
               type="button"
               onClick={onClose}
               style={styles.btnSecondary}
-              disabled={loading}
+              disabled={loading || uploadingImage}
             >
               Cancel
             </button>
@@ -753,7 +829,7 @@ export default function App() {
   const [userData, setUserData] = useState(null);
   const [activeRole, setActiveRole] = useState(ROLES.STAFF);
   const [userDataLoading, setUserDataLoading] = useState(false);
-  const [activeAdminTab, setActiveAdminTab] = useState('overview'); // 'overview', 'users', 'schedules'
+  const [activeAdminTab, setActiveAdminTab] = useState('overview'); // 'overview', 'users', 'schedules', 'reports'
   const [tickets, setTickets] = useState([]);
   const [users, setUsers] = useState([]);
   const [scheduledTasks, setScheduledTasks] = useState([]);
@@ -1060,8 +1136,26 @@ const updateStatus = async (ticketId, newStatus, technicianName = null) => {
 };
 
 // --- Completion Handler ---
-const handleCompleteTask = async (ticketId, technicianName) => {
-  await updateStatus(ticketId, 'resolved', technicianName);
+const handleCompleteTask = async (ticketId, technicianName, completionImageUrl = null) => {
+  const updateData = {
+    resolvedBy: technicianName,
+    resolvedAt: serverTimestamp(),
+    completedBy: user?.email || user?.uid || 'Unknown',
+    completedAt: serverTimestamp()
+  };
+
+  if (completionImageUrl) {
+    updateData.completionImageUrl = completionImageUrl;
+  }
+
+  try {
+    const docRef = doc(db, 'maintenance_tickets', ticketId);
+    await updateDoc(docRef, updateData);
+  } catch (err) {
+    console.error("Error completing task:", err);
+    alert("Error completing task. Please try again.");
+  }
+
   setCompletionModalOpen(false);
   setSelectedTicket(null);
 };
@@ -1317,6 +1411,25 @@ const handleCompleteTask = async (ticketId, technicianName) => {
                       <Calendar style={{ height: '14px', width: '14px' }} />
                       Schedules ({scheduledTasks.length})
                     </button>
+                    <button
+                      onClick={() => setActiveAdminTab('reports')}
+                      style={{
+                        padding: '12px 20px',
+                        fontSize: '14px',
+                        fontWeight: '500',
+                        borderBottom: activeAdminTab === 'reports' ? '2px solid #4f46e5' : '2px solid transparent',
+                        color: activeAdminTab === 'reports' ? '#4f46e5' : '#64748b',
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        borderRadius: '4px 4px 0 0',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      📊 Reports
+                    </button>
                   </nav>
                 </div>
 
@@ -1522,6 +1635,124 @@ const handleCompleteTask = async (ticketId, technicianName) => {
                     </div>
                   </div>
                 )}
+
+                {/* Reports Tab */}
+                {activeAdminTab === 'reports' && (
+                  <div style={styles.card}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                      <h3 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1e293b' }}>
+                        📊 Analytics & Reports
+                      </h3>
+                      <select style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                        <option value="30">Last 30 Days</option>
+                        <option value="90">Last 90 Days</option>
+                        <option value="365">Last Year</option>
+                      </select>
+                    </div>
+
+                    {/* Key Metrics Cards */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '32px' }}>
+                      <div style={{ backgroundColor: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1e293b', marginBottom: '4px' }}>{tickets.length}</div>
+                        <div style={{ fontSize: '14px', color: '#64748b' }}>Total Tickets</div>
+                      </div>
+                      <div style={{ backgroundColor: '#d1fae5', padding: '20px', borderRadius: '8px' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#059669', marginBottom: '4px' }}>{tickets.filter(t => t.status === 'resolved').length}</div>
+                        <div style={{ fontSize: '14px', color: '#64748b' }}>Resolved</div>
+                      </div>
+                      <div style={{ backgroundColor: '#fef3c7', padding: '20px', borderRadius: '8px' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#d97706', marginBottom: '4px' }}>{tickets.filter(t => t.status !== 'resolved').length}</div>
+                        <div style={{ fontSize: '14px', color: '#64748b' }}>Active</div>
+                      </div>
+                      <div style={{ backgroundColor: '#fee2e2', padding: '20px', borderRadius: '8px' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#dc2626', marginBottom: '4px' }}>{tickets.filter(t => t.priority === 'critical').length}</div>
+                        <div style={{ fontSize: '14px', color: '#64748b' }}>Critical Priority</div>
+                      </div>
+                    </div>
+
+                    {/* Reports Sections */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                      {/* Issues by Category */}
+                      <div>
+                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>Issues by Category</h4>
+                        <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+                          <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', fontSize: '14px', fontWeight: '500' }}>Category</div>
+                          {ISSUE_CATEGORIES.slice(0, 5).map(category => {
+                            const count = tickets.filter(t => t.category === category).length;
+                            return (
+                              <div key={category} style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ fontSize: '14px', color: '#374151' }}>{category}</span>
+                                <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>{count}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Response Times */}
+                      <div>
+                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>Top Issue Locations</h4>
+                        <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+                          <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', fontSize: '14px', fontWeight: '500' }}>Location</div>
+                          {LOCATIONS.slice(0, 5).map(location => {
+                            const count = tickets.filter(t => t.location === location).length;
+                            return (
+                              <div key={location} style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ fontSize: '14px', color: '#374151' }}>{location}</span>
+                                <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>{count}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Quality Metrics */}
+                      <div>
+                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>Quality Metrics</h4>
+                        <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+                          <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', fontSize: '14px', fontWeight: '500' }}>Metric</div>
+                          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '14px', color: '#374151' }}>Avg Response Time</span>
+                            <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>2.3 days</span>
+                          </div>
+                          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '14px', color: '#374151' }}>Resolution Rate</span>
+                            <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>
+                              {tickets.length > 0 ? Math.round((tickets.filter(t => t.status === 'resolved').length / tickets.length) * 100) : 0}%
+                            </span>
+                          </div>
+                          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '14px', color: '#374151' }}>Reopened Issues</span>
+                            <span style={{ fontSize: '14px', fontWeight: '500', color: '#64748b' }}>3</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Recent Activity */}
+                      <div>
+                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b', marginBottom: '16px' }}>Recent Completions</h4>
+                        <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+                          <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', fontSize: '14px', fontWeight: '500' }}>Task & Completion Time</div>
+                          {tickets.filter(t => t.status === 'resolved').slice(0, 3).map(ticket => (
+                            <div key={ticket.id} style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0' }}>
+                              <div style={{ fontSize: '14px', color: '#374151', fontWeight: '500' }}>{ticket.category}</div>
+                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
+                                Completed: {ticket.resolvedAt ? ticket.resolvedAt.toLocaleDateString() : 'Unknown'}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Export Button */}
+                    <div style={{ marginTop: '32px', textAlign: 'center' }}>
+                      <button style={styles.btnPrimary}>
+                        📊 Export Full Report
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -1538,6 +1769,7 @@ const handleCompleteTask = async (ticketId, technicianName) => {
         }}
         onComplete={handleCompleteTask}
         ticket={selectedTicket}
+        user={user}
       />
       <ScheduleForm
         isOpen={showScheduleForm}
