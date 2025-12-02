@@ -32,14 +32,11 @@ export default function App() {
 
     const unsubscribe = onAuthStateChange(async (u) => {
       if (!u) {
-        // If user logs out, u is null. We auto-sign in as anonymous for the Kiosk/Staff view
-        try {
-          await signInAsAnonymous();
-          // We don't stop loading here, we let the next event (anonymous login success) handle it
-        } catch (error) {
-          console.error("Anon auth failed", error);
-          setAuthLoading(false);
-        }
+        // User is logged out - allow guest access to staff view
+        setUser(null);
+        setUserData(null);
+        setActiveRole(ROLES.STAFF); // Default to staff view for guest access
+        setAuthLoading(false);
         return;
       }
 
