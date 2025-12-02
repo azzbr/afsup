@@ -197,7 +197,7 @@ function ReportForm({ user, onSuccess }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-2">Priority</label>
-          <div className="flex gap-4 items-center">
+          <div className="grid grid-cols-2 gap-2">
             {[
               { value: 'low', label: 'Low', color: 'text-slate-600' },
               { value: 'medium', label: 'Medium', color: 'text-slate-600' },
