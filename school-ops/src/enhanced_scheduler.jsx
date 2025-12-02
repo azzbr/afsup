@@ -1,10 +1,8 @@
-// Enhanced Scheduler Component for Advanced Recurring Tasks
 import React, { useState, useEffect } from 'react';
-import { Calendar, X, Plus, MapPin, Clock, AlertTriangle } from 'lucide-react';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { db } from './firebase';
+import { Calendar, X, MapPin, Clock, AlertTriangle, Check, Layers } from 'lucide-react';
+import { ISSUE_CATEGORIES } from './constants'; // Importing shared data
 
-// --- Location Groups for Bulk Selection ---
+// Location Groups specific to the Scheduler logic
 const LOCATION_GROUPS = {
   'whole_school': {
     name: 'Whole School',
@@ -40,549 +38,269 @@ const LOCATION_GROUPS = {
   }
 };
 
-const ISSUE_CATEGORIES = [
-  "Air conditioners not cooling properly",
-  "Unpleasant odors",
-  "Broken furniture (chairs, tables, shelves)",
-  "Peeling paint or damaged walls",
-  "Loose or hanging ceiling tiles",
-  "Smartboard not functioning",
-  "Water leakage (AC or ceiling)",
-  "Missing or damaged classroom supplies",
-  "Presence of insects or pests",
-  "Broken blinds or curtains",
-  "Lights not working",
-  "Dirty or unclean areas",
-  "Damaged electrical sockets",
-  "Broken or loose door handles",
-  "Safety Hazard (General)",
-  "Other"
-];
-
-// Enhanced Schedule Form with Industry-Best Features
-function EnhancedScheduleForm({ isOpen, onClose, onSubmit, user }) {
+export default function EnhancedScheduleForm({ isOpen, onClose, onSubmit }) {
   const [formData, setFormData] = useState({
     category: ISSUE_CATEGORIES[0],
     selectedLocations: [],
     priority: 'medium',
-    frequencyDays: 365,
-    startDate: new Date().toISOString().split('T')[0], // Today's date in YYYY-MM-DD
+    frequencyDays: 30, // Default monthly
+    startDate: new Date().toISOString().split('T')[0],
     isStartImmediately: true,
     description: '',
-    locationMode: 'groups' // 'groups' or 'individual'
   });
 
   const [loading, setLoading] = useState(false);
-  const [locationSearch, setLocationSearch] = useState('');
 
   const handleInputChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setFormData(prev => ({ ...prev, [field]: value }));
   };
 
   const toggleLocation = (groupKey) => {
-    if (formData.selectedLocations.includes(groupKey)) {
-      setFormData(prev => ({
-        ...prev,
-        selectedLocations: prev.selectedLocations.filter(loc => loc !== groupKey)
-      }));
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        selectedLocations: [...prev.selectedLocations, groupKey]
-      }));
-    }
-  };
-
-  const getTotalLocations = () => {
-    const selectedGroups = formData.selectedLocations
-      .map(key => LOCATION_GROUPS[key])
-      .filter(group => group);
-
-    return selectedGroups.reduce((total, group) => total + group.locations.length, 0);
+    setFormData(prev => ({
+      ...prev,
+      selectedLocations: prev.selectedLocations.includes(groupKey)
+        ? prev.selectedLocations.filter(loc => loc !== groupKey)
+        : [...prev.selectedLocations, groupKey]
+    }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
-    if (formData.selectedLocations.length === 0) {
-      alert('Please select at least one location or building group.');
-      return;
-    }
-
-    if (!formData.description.trim()) {
-      alert('Please enter a task description.');
-      return;
-    }
+    if (formData.selectedLocations.length === 0) return alert('Please select at least one location group.');
+    if (!formData.description.trim()) return alert('Please enter a task description.');
 
     setLoading(true);
-
     try {
-      // Calculate the start date
-      const startDate = formData.isStartImmediately
-        ? new Date()
-        : new Date(formData.startDate);
-
-      if (!formData.isStartImmediately && startDate < new Date()) {
-        alert('Start date cannot be in the past.');
-        setLoading(false);
-        return;
-      }
-
-      // Create individual schedules for each location
-      const selectedGroups = formData.selectedLocations
-        .map(key => LOCATION_GROUPS[key])
-        .filter(group => group);
-
+      const selectedGroups = formData.selectedLocations.map(key => LOCATION_GROUPS[key]).filter(Boolean);
       const allLocations = selectedGroups.flatMap(group => group.locations);
 
-      // Create the schedule data
       const scheduleData = {
         category: formData.category,
-        locations: allLocations, // Store all locations as array
+        locations: allLocations,
         priority: formData.priority,
         frequencyDays: parseInt(formData.frequencyDays),
-        startDate: startDate.toISOString(),
+        startDate: formData.isStartImmediately ? new Date().toISOString() : new Date(formData.startDate).toISOString(),
         isStartImmediately: formData.isStartImmediately,
         description: formData.description.trim(),
-        selectedGroups: formData.selectedLocations, // Store which groups were selected
-        totalLocations: allLocations.length,
-        nextRun: startDate,
-        isActive: true
+        selectedGroups: formData.selectedLocations,
       };
 
       await onSubmit(scheduleData);
-      resetForm();
       onClose();
-
     } catch (error) {
-      console.error('Error creating schedule:', error);
-      alert('Error creating schedule: ' + error.message);
+      console.error(error);
+      alert('Error creating schedule.');
     } finally {
       setLoading(false);
     }
   };
 
-  const resetForm = () => {
-    setFormData({
-      category: ISSUE_CATEGORIES[0],
-      selectedLocations: [],
-      priority: 'medium',
-      frequencyDays: 365,
-      startDate: new Date().toISOString().split('T')[0],
-      isStartImmediately: true,
-      description: '',
-      locationMode: 'groups'
-    });
-    setLocationSearch('');
-  };
-
   useEffect(() => {
-    if (!isOpen) resetForm();
+    if (!isOpen) {
+      setFormData({
+        category: ISSUE_CATEGORIES[0],
+        selectedLocations: [],
+        priority: 'medium',
+        frequencyDays: 30,
+        startDate: new Date().toISOString().split('T')[0],
+        isStartImmediately: true,
+        description: '',
+      });
+    }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const selectedCount = formData.selectedLocations.length;
-  const totalLocations = getTotalLocations();
+  const totalLocations = formData.selectedLocations.reduce((acc, key) => acc + (LOCATION_GROUPS[key]?.locations.length || 0), 0);
 
   return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.6)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 60,
-      padding: '20px'
-    }}>
-      <div 
-        className="modal-content-wrapper"
-        style={{
-          backgroundColor: 'white',
-          padding: '32px',
-          borderRadius: '16px',
-          width: '100%',
-          maxWidth: '700px',
-          maxHeight: '90vh',
-          overflow: 'auto',
-          position: 'relative',
-          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
-        }}
-      >
-        <button
-          onClick={onClose}
-          style={{
-            position: 'absolute',
-            top: '20px',
-            right: '20px',
-            backgroundColor: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            padding: '8px',
-            borderRadius: '6px',
-            color: '#6b7280'
-          }}
-        >
-          <X size={20} />
-        </button>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
 
-        <div style={{ marginBottom: '24px' }}>
-          <h2 style={{
-            fontSize: '24px',
-            fontWeight: 'bold',
-            color: '#1e293b',
-            marginBottom: '4px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px'
-          }}>
-            <Calendar style={{ height: '24px', width: '24px', color: '#4f46e5' }} />
-            Create Advanced Schedule
-          </h2>
-          <p style={{ color: '#64748b', fontSize: '14px' }}>
-            Schedule recurring maintenance across multiple locations
-          </p>
+        {/* Header */}
+        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <Calendar className="text-indigo-600" /> Create Advanced Schedule
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">Automate recurring maintenance tasks</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-400 transition-colors">
+            <X size={20} />
+          </button>
         </div>
 
-        <form onSubmit={handleSubmit}>
-          {/* Task Details Row */}
-          <div style={{ marginBottom: '24px' }}>
-            <h3 style={{ fontSize: '16px', fontWeight: '600', color: '#374151', marginBottom: '16px' }}>
-              1. Task Details
-            </h3>
+        {/* Scrollable Form Body */}
+        <div className="p-6 overflow-y-auto space-y-8">
 
-            <div className="responsive-grid-2" style={{ marginBottom: '16px' }}>
+          {/* Section 1: Task Info */}
+          <section className="space-y-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 uppercase tracking-wide">
+              <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs">1</span>
+              Task Details
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '6px'
-                }}>
-                  Issue Category
-                </label>
+                <label className="block text-xs font-medium text-slate-500 uppercase mb-1">Issue Category</label>
                 <select
                   value={formData.category}
                   onChange={(e) => handleInputChange('category', e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    backgroundColor: 'white'
-                  }}
+                  className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
                 >
-                  {ISSUE_CATEGORIES.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
+                  {ISSUE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
-
               <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '6px'
-                }}>
-                  Priority Level
-                </label>
+                <label className="block text-xs font-medium text-slate-500 uppercase mb-1">Priority</label>
                 <select
                   value={formData.priority}
                   onChange={(e) => handleInputChange('priority', e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    backgroundColor: 'white'
-                  }}
+                  className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
                 >
-                  <option value="low">Low - Routine Maintenance</option>
-                  <option value="medium">Medium - Regular Check</option>
-                  <option value="high">High - Important Task</option>
-                  <option value="critical">Critical - Urgent Priority</option>
+                  <option value="low">Low - Routine</option>
+                  <option value="medium">Medium - Standard</option>
+                  <option value="high">High - Priority</option>
+                  <option value="critical">Critical - Urgent</option>
                 </select>
               </div>
             </div>
 
             <div>
-              <label style={{
-                display: 'block',
-                fontSize: '14px',
-                fontWeight: '500',
-                color: '#374151',
-                marginBottom: '6px'
-              }}>
-                Task Description *
-              </label>
+              <label className="block text-xs font-medium text-slate-500 uppercase mb-1">Description</label>
               <textarea
                 value={formData.description}
                 onChange={(e) => handleInputChange('description', e.target.value)}
-                placeholder="Describe the maintenance task (e.g., 'Annual AC filter replacement and cleaning')"
-                rows={3}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  resize: 'vertical',
-                  minHeight: '80px'
-                }}
-                required
+                placeholder="E.g. Annual AC Filter Cleaning & Gas Check"
+                rows={2}
+                className="w-full p-3 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
               />
             </div>
-          </div>
+          </section>
 
-          {/* Location Selection */}
-          <div style={{ marginBottom: '24px' }}>
-            <h3 style={{
-              fontSize: '16px',
-              fontWeight: '600',
-              color: '#374151',
-              marginBottom: '16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}>
-              <MapPin style={{ height: '18px', width: '18px', color: '#4f46e5' }} />
-              2. Location Selection
+          {/* Section 2: Locations */}
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 uppercase tracking-wide">
+                <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs">2</span>
+                Target Locations
+              </div>
               {selectedCount > 0 && (
-                <span style={{
-                  backgroundColor: '#dbeafe',
-                  color: '#2563eb',
-                  padding: '2px 8px',
-                  borderRadius: '12px',
-                  fontSize: '12px',
-                  fontWeight: '500'
-                }}>
-                  {selectedCount} groups • {totalLocations} locations
+                <span className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-xs font-medium">
+                  {totalLocations} rooms selected
                 </span>
               )}
-            </h3>
+            </div>
 
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-              gap: '12px'
-            }}>
-              {Object.entries(LOCATION_GROUPS).map(([key, group]) => (
-                <label
-                  key={key}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    padding: '12px',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    backgroundColor: formData.selectedLocations.includes(key) ? '#f0f9ff' : 'white',
-                    borderColor: formData.selectedLocations.includes(key) ? '#3b82f6' : '#e2e8f0',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={formData.selectedLocations.includes(key)}
-                    onChange={() => toggleLocation(key)}
-                    style={{ marginRight: '12px', accentColor: '#3b82f6' }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: '500', color: '#374151', marginBottom: '2px' }}>
-                      {group.name}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {Object.entries(LOCATION_GROUPS).map(([key, group]) => {
+                const isSelected = formData.selectedLocations.includes(key);
+                return (
+                  <div
+                    key={key}
+                    onClick={() => toggleLocation(key)}
+                    className={`cursor-pointer border rounded-xl p-3 flex items-start gap-3 transition-all ${
+                      isSelected ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-200' : 'bg-white border-slate-200 hover:border-indigo-300'
+                    }`}
+                  >
+                    <div className={`mt-0.5 w-5 h-5 rounded border flex items-center justify-center transition-colors ${
+                      isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300'
+                    }`}>
+                      {isSelected && <Check size={12} strokeWidth={3} />}
                     </div>
-                    <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                      {group.locations.length} locations
+                    <div>
+                      <p className={`text-sm font-semibold ${isSelected ? 'text-indigo-900' : 'text-slate-700'}`}>
+                        {group.name}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {group.locations.length} Units
+                      </p>
                     </div>
                   </div>
-                </label>
-              ))}
+                );
+              })}
             </div>
-
             {selectedCount === 0 && (
-              <div style={{
-                marginTop: '12px',
-                padding: '12px',
-                backgroundColor: '#fef2f2',
-                border: '1px solid #fecaca',
-                borderRadius: '6px',
-                color: '#dc2626',
-                fontSize: '14px'
-              }}>
-                <AlertTriangle style={{ height: '16px', width: '16px', display: 'inline', marginRight: '8px' }} />
-                Please select at least one location group.
+              <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg text-sm">
+                <AlertTriangle size={16} /> Select at least one location group above.
               </div>
             )}
-          </div>
+          </section>
 
-          {/* Schedule Settings */}
-          <div style={{ marginBottom: '24px' }}>
-            <h3 style={{
-              fontSize: '16px',
-              fontWeight: '600',
-              color: '#374151',
-              marginBottom: '16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}>
-              <Clock style={{ height: '18px', width: '18px', color: '#4f46e5' }} />
-              3. Schedule Settings
-            </h3>
+          {/* Section 3: Timing */}
+          <section className="space-y-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 uppercase tracking-wide">
+              <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs">3</span>
+              Schedule Settings
+            </div>
 
-            <div className="responsive-grid-2" style={{ marginBottom: '16px' }}>
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '6px'
-                }}>
-                  Frequency
-                </label>
-                <select
-                  value={formData.frequencyDays}
-                  onChange={(e) => handleInputChange('frequencyDays', parseInt(e.target.value))}
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    backgroundColor: 'white'
-                  }}
-                >
-                  <option value={7}>Weekly (7 days)</option>
-                  <option value={14}>Bi-weekly (14 days)</option>
-                  <option value={30}>Monthly (30 days)</option>
-                  <option value={60}>Every 2 months</option>
-                  <option value={90}>Quarterly (90 days)</option>
-                  <option value={180}>Semi-annually (6 months)</option>
-                  <option value={365}>Annually (365 days)</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  color: '#374151',
-                  marginBottom: '6px'
-                }}>
-                  Start Timing
-                </label>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={formData.isStartImmediately}
-                      onChange={(e) => handleInputChange('isStartImmediately', e.target.checked)}
-                    />
-                    <span style={{ fontSize: '14px', color: '#374151' }}>Start immediately</span>
-                  </label>
-                  {!formData.isStartImmediately && (
-                    <input
-                      type="date"
-                      value={formData.startDate}
-                      min={new Date().toISOString().split('T')[0]}
-                      onChange={(e) => handleInputChange('startDate', e.target.value)}
-                      style={{
-                        padding: '8px 12px',
-                        border: '1px solid #d1d5db',
-                        borderRadius: '6px',
-                        fontSize: '14px',
-                        backgroundColor: 'white'
-                      }}
-                    />
-                  )}
+                <label className="block text-xs font-medium text-slate-500 uppercase mb-1">Repetition</label>
+                <div className="relative">
+                  <Clock className="absolute left-3 top-2.5 text-slate-400 w-4 h-4" />
+                  <select
+                    value={formData.frequencyDays}
+                    onChange={(e) => handleInputChange('frequencyDays', e.target.value)}
+                    className="w-full pl-9 p-2 border border-slate-200 rounded-lg text-sm bg-white outline-none"
+                  >
+                    <option value={7}>Weekly (7 Days)</option>
+                    <option value={14}>Bi-Weekly (14 Days)</option>
+                    <option value={30}>Monthly (30 Days)</option>
+                    <option value={90}>Quarterly (90 Days)</option>
+                    <option value={180}>Semi-Annually (6 Months)</option>
+                    <option value={365}>Yearly (365 Days)</option>
+                  </select>
                 </div>
               </div>
-            </div>
-          </div>
 
-          {/* Summary */}
-          <div style={{
-            backgroundColor: '#f8fafc',
-            padding: '20px',
-            borderRadius: '12px',
-            marginBottom: '24px'
-          }}>
-            <h4 style={{ fontSize: '16px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
-              Schedule Summary
-            </h4>
-            <div style={{ fontSize: '14px', color: '#4b5563', lineHeight: '1.6' }}>
-              <div><strong>Task:</strong> {formData.description || 'No description'}</div>
-              <div><strong>Category:</strong> {formData.category}</div>
-              <div><strong>Locations:</strong> {totalLocations} locations across {selectedCount} groups</div>
-              <div><strong>Frequency:</strong> Every {formData.frequencyDays} days</div>
-              <div><strong>Next Due:</strong> {formData.isStartImmediately ? 'Today' : new Date(formData.startDate).toLocaleDateString()}</div>
-              <div><strong>Total Scheduled Tasks:</strong> {totalLocations} individual tasks will be created</div>
-            </div>
-          </div>
+              <div>
+                 <label className="block text-xs font-medium text-slate-500 uppercase mb-1">Start Date</label>
+                 <div className="space-y-2">
+                   <label className="flex items-center gap-2 cursor-pointer">
+                     <input
+                       type="checkbox"
+                       checked={formData.isStartImmediately}
+                       onChange={(e) => handleInputChange('isStartImmediately', e.target.checked)}
+                       className="rounded text-indigo-600 focus:ring-indigo-500"
+                     />
+                     <span className="text-sm text-slate-700">Start Immediately</span>
+                   </label>
 
-          {/* Actions */}
-          <div 
-            className="modal-actions"
-            style={{
-              display: 'flex',
-              gap: '12px',
-              justifyContent: 'flex-end',
-              paddingTop: '20px',
-              borderTop: '1px solid #e2e8f0'
-            }}
+                   {!formData.isStartImmediately && (
+                     <input
+                       type="date"
+                       value={formData.startDate}
+                       onChange={(e) => handleInputChange('startDate', e.target.value)}
+                       min={new Date().toISOString().split('T')[0]}
+                       className="w-full p-2 border border-slate-200 rounded-lg text-sm outline-none"
+                     />
+                   )}
+                 </div>
+              </div>
+            </div>
+          </section>
+
+        </div>
+
+        {/* Footer Actions */}
+        <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-5 py-2.5 text-slate-600 font-medium hover:bg-slate-200 rounded-lg transition-colors"
           >
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                backgroundColor: 'transparent',
-                color: '#6b7280',
-                border: '1px solid #d1d5db',
-                padding: '10px 24px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: '500',
-                cursor: 'pointer'
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || selectedCount === 0 || !formData.description.trim()}
-              style={{
-                backgroundColor: '#4f46e5',
-                color: 'white',
-                border: 'none',
-                padding: '10px 24px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                opacity: (loading || selectedCount === 0 || !formData.description.trim()) ? 0.5 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}
-            >
-              {loading ? 'Creating...' : `Create Schedule (${totalLocations} tasks)`}
-            </button>
-          </div>
-        </form>
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading || selectedCount === 0}
+            className="px-6 py-2.5 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm flex items-center gap-2"
+          >
+            {loading ? 'Creating...' : `Create Schedule (${totalLocations} Tasks)`}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
-
-export default EnhancedScheduleForm;

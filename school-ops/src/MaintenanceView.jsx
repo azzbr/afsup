@@ -1,189 +1,120 @@
 import React, { useState, useEffect } from 'react';
 import { updateDoc, doc, serverTimestamp, collection, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
-import { Wrench, X, Image as ImageIcon, CheckCircle, MapPin, Clock, User, FileText, Camera, Calendar, RefreshCw } from 'lucide-react';
+import {
+  Wrench, X, Image as ImageIcon, CheckCircle, MapPin,
+  Clock, User, FileText, Camera, Calendar, RefreshCw, AlertTriangle
+} from 'lucide-react';
 import { compressImage, uploadImage } from './storage';
 
+// --- Badges ---
 const StatusBadge = ({ status }) => {
-  const config = { open: { color: '#dc2626', bg: '#fef2f2', text: 'Open' }, in_progress: { color: '#d97706', bg: '#fef3c7', text: 'In Progress' }, resolved: { color: '#059669', bg: '#d1fae5', text: 'Resolved' } };
-  const style = config[status] || config.open;
-  return <span style={{ padding: '4px 8px', borderRadius: '9999px', fontSize: '11px', fontWeight: '600', color: style.color, backgroundColor: style.bg }}>{style.text}</span>;
+  const styles = {
+    open: "bg-red-50 text-red-700 border-red-100",
+    in_progress: "bg-amber-50 text-amber-700 border-amber-100",
+    resolved: "bg-emerald-50 text-emerald-700 border-emerald-100"
+  };
+  const labels = { open: 'Open', in_progress: 'In Progress', resolved: 'Resolved' };
+  return (
+    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${styles[status] || styles.open}`}>
+      {labels[status] || status}
+    </span>
+  );
 };
 
 const PriorityBadge = ({ priority }) => {
-  const config = { low: { color: '#6b7280', bg: '#f3f4f6' }, medium: { color: '#2563eb', bg: '#dbeafe' }, high: { color: '#ea580c', bg: '#fed7aa' }, critical: { color: 'white', bg: '#dc2626' } };
-  const style = config[priority] || config.medium;
-  return <span style={{ padding: '2px 6px', borderRadius: '4px', fontSize: '10px', fontWeight: '600', color: style.color, backgroundColor: style.bg, textTransform: 'uppercase' }}>{priority}</span>;
+  const styles = {
+    low: "bg-slate-100 text-slate-600",
+    medium: "bg-blue-50 text-blue-700",
+    high: "bg-orange-50 text-orange-700",
+    critical: "bg-red-600 text-white animate-pulse"
+  };
+  return (
+    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${styles[priority] || styles.medium}`}>
+      {priority}
+    </span>
+  );
 };
 
-// Ticket Detail Modal Component
+// --- Modals ---
+
 function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName, getTimeElapsed }) {
   const [selectedImage, setSelectedImage] = useState(null);
-
   if (!isOpen || !ticket) return null;
 
-  const formatDate = (date) => {
-    if (!date) return 'N/A';
-    const d = date.toDate ? date.toDate() : new Date(date);
-    return d.toLocaleString('en-US', {
-      weekday: 'short',
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
   return (
-    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '16px' }}>
-      <div style={{ backgroundColor: 'white', borderRadius: '12px', width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto' }}>
-        {/* Header */}
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', position: 'sticky', top: 0, backgroundColor: 'white', zIndex: 10 }}>
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="p-5 border-b border-slate-100 flex justify-between items-start bg-slate-50">
           <div>
-            <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e293b', marginBottom: '4px' }}>{ticket.category}</h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <span style={{ 
-                padding: '2px 8px', 
-                borderRadius: '4px', 
-                fontSize: '11px', 
-                fontWeight: '600', 
-                textTransform: 'uppercase',
-                backgroundColor: ticket.priority === 'critical' ? '#dc2626' : ticket.priority === 'high' ? '#fed7aa' : ticket.priority === 'medium' ? '#dbeafe' : '#f3f4f6',
-                color: ticket.priority === 'critical' ? 'white' : ticket.priority === 'high' ? '#ea580c' : ticket.priority === 'medium' ? '#2563eb' : '#6b7280'
-              }}>
-                {ticket.priority}
-              </span>
-              <span style={{ 
-                padding: '4px 8px', 
-                borderRadius: '9999px', 
-                fontSize: '11px', 
-                fontWeight: '600',
-                backgroundColor: ticket.status === 'open' ? '#fef2f2' : ticket.status === 'in_progress' ? '#fef3c7' : '#d1fae5',
-                color: ticket.status === 'open' ? '#dc2626' : ticket.status === 'in_progress' ? '#d97706' : '#059669'
-              }}>
-                {ticket.status === 'open' ? 'Open' : ticket.status === 'in_progress' ? 'In Progress' : 'Resolved'}
-              </span>
+            <h3 className="font-bold text-lg text-slate-800">{ticket.category}</h3>
+            <div className="flex gap-2 mt-1">
+              <PriorityBadge priority={ticket.priority} />
+              <StatusBadge status={ticket.status} />
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
-            <X size={24} color="#64748b" />
+          <button onClick={onClose} className="p-1 hover:bg-slate-200 rounded-full text-slate-400">
+            <X size={20} />
           </button>
         </div>
 
-        {/* Content */}
-        <div style={{ padding: '24px' }}>
-          {/* Location */}
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '20px' }}>
-            <MapPin size={20} color="#4f46e5" style={{ marginTop: '2px', flexShrink: 0 }} />
-            <div>
-              <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '2px' }}>Location</p>
-              <p style={{ fontSize: '15px', fontWeight: '500', color: '#1e293b' }}>{ticket.location}</p>
-            </div>
-          </div>
+        <div className="p-5 overflow-y-auto space-y-5">
+           <div className="grid grid-cols-2 gap-4 text-sm">
+             <div>
+               <p className="text-xs text-slate-400 uppercase font-semibold mb-1">Location</p>
+               <div className="flex items-center gap-2 text-slate-700 font-medium">
+                 <MapPin size={14} className="text-indigo-500" /> {ticket.location}
+               </div>
+             </div>
+             <div>
+               <p className="text-xs text-slate-400 uppercase font-semibold mb-1">Reported By</p>
+               <div className="flex items-center gap-2 text-slate-700 font-medium">
+                 <User size={14} className="text-indigo-500" />
+                 {ticket.submittedBy ? getDisplayName(ticket.submittedBy) : ticket.reporterName || 'Anonymous'}
+               </div>
+             </div>
+           </div>
 
-          {/* Reported By & Date */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <User size={20} color="#4f46e5" style={{ marginTop: '2px', flexShrink: 0 }} />
-              <div>
-                <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '2px' }}>Reported By</p>
-                <p style={{ fontSize: '15px', fontWeight: '500', color: '#1e293b' }}>
-                  {ticket.submittedBy ? getDisplayName(ticket.submittedBy) : ticket.reporterName || 'Anonymous'}
-                </p>
-              </div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <Clock size={20} color="#4f46e5" style={{ marginTop: '2px', flexShrink: 0 }} />
-              <div>
-                <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '2px' }}>Reported On</p>
-                <p style={{ fontSize: '15px', fontWeight: '500', color: '#1e293b' }}>{formatDate(ticket.createdAt)}</p>
-              </div>
-            </div>
-          </div>
+           <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+             <p className="text-xs text-slate-400 uppercase font-semibold mb-1">Description</p>
+             <p className="text-slate-700 text-sm whitespace-pre-wrap">{ticket.description}</p>
+           </div>
 
-          {/* Description */}
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '20px' }}>
-            <FileText size={20} color="#4f46e5" style={{ marginTop: '2px', flexShrink: 0 }} />
-            <div style={{ flex: 1 }}>
-              <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Description</p>
-              <div style={{ backgroundColor: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <p style={{ fontSize: '14px', color: '#374151', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
-                  {ticket.description || 'No description provided'}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Photos */}
-          {ticket.imageUrls && ticket.imageUrls.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '20px' }}>
-              <Camera size={20} color="#4f46e5" style={{ marginTop: '2px', flexShrink: 0 }} />
-              <div style={{ flex: 1 }}>
-                <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '8px' }}>Photos ({ticket.imageUrls.length})</p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '8px' }}>
-                  {ticket.imageUrls.map((url, index) => (
-                    <img
-                      key={index}
-                      src={url}
-                      alt={`Issue photo ${index + 1}`}
-                      style={{ 
-                        width: '100%', 
-                        height: '100px', 
-                        objectFit: 'cover', 
-                        borderRadius: '8px', 
-                        cursor: 'pointer',
-                        border: '1px solid #e2e8f0'
-                      }}
-                      onClick={() => setSelectedImage(url)}
-                    />
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Work Status (if in progress) */}
-          {ticket.status === 'in_progress' && ticket.startedAt && (
-            <div style={{ backgroundColor: '#fef3c7', padding: '12px 16px', borderRadius: '8px', border: '1px solid #fde68a' }}>
-              <p style={{ fontSize: '13px', color: '#92400e', fontWeight: '500' }}>
-                🔧 Being worked on by {ticket.startedByName || getDisplayName(ticket.assignedTo)} • Started {getTimeElapsed(ticket.startedAt)}
-              </p>
-            </div>
-          )}
+           {ticket.imageUrls?.length > 0 && (
+             <div>
+               <p className="text-xs text-slate-400 uppercase font-semibold mb-2 flex items-center gap-1">
+                 <Camera size={12} /> Photos
+               </p>
+               <div className="grid grid-cols-3 gap-2">
+                 {ticket.imageUrls.map((url, i) => (
+                   <img
+                     key={i} src={url} alt="Proof"
+                     className="h-16 w-full object-cover rounded-lg border border-slate-200 cursor-pointer hover:opacity-80"
+                     onClick={() => setSelectedImage(url)}
+                   />
+                 ))}
+               </div>
+             </div>
+           )}
         </div>
 
-        {/* Footer */}
-        <div style={{ padding: '16px 24px', borderTop: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>
-          <button 
-            onClick={onClose} 
-            style={{ width: '100%', padding: '10px', backgroundColor: '#4f46e5', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '500', cursor: 'pointer' }}
-          >
+        <div className="p-4 bg-slate-50 border-t border-slate-100">
+          <button onClick={onClose} className="w-full py-2 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800">
             Close
           </button>
         </div>
       </div>
 
-      {/* Image Lightbox */}
       {selectedImage && (
-        <div 
-          style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.9)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, cursor: 'pointer' }}
-          onClick={() => setSelectedImage(null)}
-        >
-          <img src={selectedImage} alt="Full size" style={{ maxWidth: '90%', maxHeight: '90%', objectFit: 'contain', borderRadius: '8px' }} />
-          <button 
-            onClick={() => setSelectedImage(null)} 
-            style={{ position: 'absolute', top: '20px', right: '20px', background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '50%', padding: '8px', cursor: 'pointer' }}
-          >
-            <X size={24} color="white" />
-          </button>
+        <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4" onClick={() => setSelectedImage(null)}>
+          <img src={selectedImage} className="max-w-full max-h-full rounded" alt="Full" />
+          <button className="absolute top-4 right-4 text-white"><X size={32}/></button>
         </div>
       )}
     </div>
   );
 }
 
-// Completion Modal Component
 function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
   const [technicianName, setTechnicianName] = useState('');
   const [completionNotes, setCompletionNotes] = useState('');
@@ -193,100 +124,107 @@ function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
 
   const handleImageSelect = async (e) => {
     const files = Array.from(e.target.files);
-    if (files.length + completionFiles.length > 3) {
-      alert("Maximum 3 completion photos allowed.");
-      return;
-    }
+    if (files.length + completionFiles.length > 3) return alert("Max 3 photos.");
     for (const file of files) {
       try {
         const compressed = await compressImage(file);
         setCompletionFiles(prev => [...prev, compressed]);
-      } catch (error) {
-        console.error("Error compressing:", error);
-      }
+      } catch (e) { console.error(e); }
     }
-    e.target.value = null;
   };
 
   const handleSubmit = async () => {
-    if (!technicianName.trim()) {
-      alert("Please enter your name.");
-      return;
-    }
+    if (!technicianName.trim()) return alert("Enter your name.");
     setSubmitting(true);
     try {
       let imageUrls = [];
       if (completionFiles.length > 0) {
         setUploading(true);
+        const urls = [];
         for (let i = 0; i < completionFiles.length; i++) {
-          const result = await uploadImage(completionFiles[i], `completion_${ticket.id}_${i}`);
-          if (result.success) imageUrls.push(result.downloadURL);
+          const res = await uploadImage(completionFiles[i], `completion_${ticket.id}_${i}`);
+          if (res.success) urls.push(res.downloadURL);
         }
         setUploading(false);
+        imageUrls = urls;
       }
       await onComplete(ticket.id, technicianName.trim(), completionNotes.trim(), imageUrls);
       onClose();
-    } catch (error) {
-      console.error("Error completing:", error);
-      alert("Failed to complete task.");
-    } finally {
-      setSubmitting(false);
-    }
+    } catch (e) { alert("Failed to complete."); } finally { setSubmitting(false); }
   };
 
   if (!isOpen) return null;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div style={{ backgroundColor: 'white', padding: '24px', borderRadius: '12px', width: '100%', maxWidth: '500px', margin: '16px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e293b' }}>Complete Task</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={20} /></button>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <p style={{ fontWeight: '600', color: '#1e293b' }}>{ticket?.category}</p>
-          <p style={{ fontSize: '13px', color: '#64748b' }}>{ticket?.location}</p>
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Technician Name *</label>
-          <input type="text" value={technicianName} onChange={(e) => setTechnicianName(e.target.value)} placeholder="Enter your name" style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px' }} />
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Completion Notes</label>
-          <textarea value={completionNotes} onChange={(e) => setCompletionNotes(e.target.value)} placeholder="Describe work completed..." style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px', minHeight: '80px' }} />
-        </div>
-
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Completion Photos (Optional)</label>
-          <label style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: '6px', backgroundColor: 'white' }}>
-            <ImageIcon size={16} /> Add Photos
-            <input type="file" multiple accept="image/*" style={{ display: 'none' }} onChange={handleImageSelect} />
-          </label>
-          {completionFiles.length > 0 && (
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              {completionFiles.map((f, i) => (
-                <div key={i} style={{ position: 'relative' }}>
-                  <img src={f} alt="" style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '6px' }} />
-                  <button onClick={() => setCompletionFiles(prev => prev.filter((_, idx) => idx !== i))} style={{ position: 'absolute', top: '-4px', right: '-4px', backgroundColor: '#ef4444', color: 'white', borderRadius: '50%', border: 'none', width: '18px', height: '18px', cursor: 'pointer', fontSize: '12px' }}>×</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <button onClick={handleSubmit} disabled={submitting || uploading} style={{ flex: 1, padding: '10px', backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '500', cursor: 'pointer', opacity: (submitting || uploading) ? 0.5 : 1 }}>
-            {uploading ? 'Uploading...' : submitting ? 'Completing...' : '✓ Mark Complete'}
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+        <h3 className="text-lg font-bold text-slate-800 mb-4">Complete Task</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium text-slate-700">Technician Name *</label>
+            <input
+              type="text"
+              className="w-full mt-1 p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+              value={technicianName}
+              onChange={e => setTechnicianName(e.target.value)}
+              placeholder="Who fixed this?"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-slate-700">Notes</label>
+            <textarea
+              className="w-full mt-1 p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none h-20"
+              value={completionNotes}
+              onChange={e => setCompletionNotes(e.target.value)}
+              placeholder="What was done?"
+            />
+          </div>
+          <div>
+             <label className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-600 rounded-lg cursor-pointer hover:bg-slate-200 w-fit text-sm font-medium">
+               <Camera size={16}/> Add Proof Photos
+               <input type="file" multiple accept="image/*" className="hidden" onChange={handleImageSelect} />
+             </label>
+             <div className="flex gap-2 mt-2">
+               {completionFiles.map((f, i) => (
+                 <div key={i} className="relative w-12 h-12">
+                   <img src={f} className="w-full h-full object-cover rounded" alt="Thumb" />
+                   <button onClick={() => setCompletionFiles(p => p.filter((_, x) => x !== i))} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-md"><X size={12}/></button>
+                 </div>
+               ))}
+             </div>
+          </div>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || uploading}
+            className="w-full py-2.5 bg-emerald-600 text-white rounded-xl font-medium shadow-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {(submitting || uploading) ? (
+              <>
+                {uploading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Uploading Photos...
+                  </>
+                ) : (
+                  <>
+                    Completing...
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <CheckCircle size={18} />
+                Mark as Resolved
+              </>
+            )}
           </button>
-          <button onClick={onClose} style={{ padding: '10px 20px', backgroundColor: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: '8px', cursor: 'pointer' }}>Cancel</button>
         </div>
       </div>
     </div>
   );
 }
+
+// --- Main Component ---
 
 export default function MaintenanceView({ tickets, user, userData }) {
   const [selectedTicket, setSelectedTicket] = useState(null);
@@ -297,53 +235,30 @@ export default function MaintenanceView({ tickets, user, userData }) {
 
   const activeTickets = tickets.filter(t => t.status !== 'resolved');
 
-  // Fetch scheduled tasks
   useEffect(() => {
-    if (!db) return;
-
-    const scheduledTasksRef = collection(db, 'scheduled_tasks');
-    const unsubscribe = onSnapshot(scheduledTasksRef, (snapshot) => {
-      const scheduled = snapshot.docs
-        .map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }))
-        .filter(task => task.isActive !== false) // Only show active schedules
-        .sort((a, b) => {
-          // Sort by next due date
-          const aDate = a.nextRun?.toDate ? a.nextRun.toDate() : new Date();
-          const bDate = b.nextRun?.toDate ? b.nextRun.toDate() : new Date();
-          return aDate - bDate;
-        });
-
+    const unsub = onSnapshot(collection(db, 'scheduled_tasks'), (snap) => {
+      const scheduled = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(t => t.isActive !== false)
+        .sort((a, b) => (a.nextRun?.toDate?.() || new Date()) - (b.nextRun?.toDate?.() || new Date()));
       setScheduledTasks(scheduled);
-    }, (error) => {
-      console.error("Error fetching scheduled tasks:", error);
     });
-
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
-  // Helper function to format time elapsed
-  const getTimeElapsed = (startedAt) => {
-    if (!startedAt) return '';
-    const started = startedAt.toDate ? startedAt.toDate() : new Date(startedAt);
-    const now = new Date();
-    const diffMs = now - started;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
-    
-    if (diffDays > 0) return `${diffDays}d ago`;
-    if (diffHours > 0) return `${diffHours}h ago`;
-    if (diffMins > 0) return `${diffMins}m ago`;
-    return 'Just now';
-  };
-
-  // Helper to get display name from email
   const getDisplayName = (email) => {
     if (!email) return 'Unknown';
-    return email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1);
+    const name = email.split('@')[0];
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  };
+
+  const getTimeElapsed = (startedAt) => {
+    if (!startedAt) return '';
+    const diff = new Date() - (startedAt.toDate ? startedAt.toDate() : new Date(startedAt));
+    const mins = Math.floor(diff / 60000);
+    const hrs = Math.floor(mins / 60);
+    if (Math.floor(hrs / 24) > 0) return `${Math.floor(hrs / 24)}d ago`;
+    if (hrs > 0) return `${hrs}h ago`;
+    return `${mins}m ago`;
   };
 
   const startJob = async (ticketId) => {
@@ -354,222 +269,133 @@ export default function MaintenanceView({ tickets, user, userData }) {
         assignedTo: userData?.email || user?.uid,
         startedByName: userData?.name || userData?.email?.split('@')[0] || 'Technician'
       });
-    } catch (error) {
-      console.error("Error starting job:", error);
-      alert("Failed to start job.");
+    } catch (e) {
+      console.error(e);
+      alert("Error starting job");
     }
   };
 
-  const completeTask = async (ticketId, technicianName, notes, imageUrls) => {
+  const completeTask = async (id, techName, notes, imageUrls) => {
     try {
       const updateData = {
         status: 'resolved',
         resolvedAt: serverTimestamp(),
-        resolvedBy: technicianName,
+        resolvedBy: techName,
         completionNotes: notes,
         completedBy: userData?.email || user?.uid
       };
-      
-      // QUICK FIX: If this was an "Open" ticket (skipped the start phase), set start time now
-      if (selectedTicket && selectedTicket.status === 'open') {
-        updateData.startedAt = serverTimestamp();
-        updateData.assignedTo = userData?.email || user?.uid;
-        updateData.startedByName = technicianName;
-        updateData.quickFixed = true; // Flag to indicate this was a quick fix
+      if (selectedTicket?.status === 'open') {
+         updateData.startedAt = serverTimestamp();
+         updateData.assignedTo = userData?.email;
+         updateData.startedByName = techName;
+         updateData.quickFixed = true;
       }
-      
-      if (imageUrls && imageUrls.length > 0) {
-        updateData.completionImageUrls = imageUrls;
-      }
-      await updateDoc(doc(db, 'maintenance_tickets', ticketId), updateData);
-    } catch (error) {
-      console.error("Error completing:", error);
-      throw error;
+      if (imageUrls?.length) updateData.completionImageUrls = imageUrls;
+      await updateDoc(doc(db, 'maintenance_tickets', id), updateData);
+    } catch (e) {
+      console.error("Error completing:", e);
+      throw e;
     }
   };
 
-  const openCompletionModal = (ticket) => {
-    setSelectedTicket(ticket);
-    setShowCompletionModal(true);
-  };
-
-  const openDetailModal = (ticket) => {
-    setDetailTicket(ticket);
-    setShowDetailModal(true);
-  };
-
   return (
-    <div>
-      {/* Maintenance Job Queue Card */}
-      <div style={{ padding: '16px', backgroundColor: 'white', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
-        <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1e293b', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Wrench style={{ height: '20px', width: '20px', color: '#4f46e5' }} /> Maintenance Job Queue
-        </h2>
-        <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '16px' }}>Manage and complete assigned maintenance tasks</p>
+    <div className="space-y-6">
+
+      {/* Queue Card */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex items-center gap-2 bg-slate-50/50">
+          <Wrench className="w-5 h-5 text-indigo-600" />
+          <h2 className="font-bold text-slate-800">Maintenance Queue</h2>
+        </div>
 
         {activeTickets.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '48px', color: '#64748b' }}>
-            <CheckCircle style={{ height: '48px', width: '48px', margin: '0 auto 16px', color: '#10b981' }} />
-            <p style={{ fontSize: '18px', fontWeight: '600' }}>All tasks completed!</p>
-            <p>No pending maintenance jobs.</p>
+          <div className="text-center py-12">
+            <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
+            <p className="text-slate-800 font-medium">All Caught Up!</p>
+            <p className="text-slate-500 text-sm">No pending tasks.</p>
           </div>
         ) : (
-          <div className="table-container">
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#f8fafc' }}>
-                <th style={{ padding: '5px', textAlign: 'left', fontSize: '12px', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>Category / Location</th>
-                <th style={{ padding: '5px', textAlign: 'center', fontSize: '12px', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>Status</th>
-                <th style={{ padding: '5px', textAlign: 'center', fontSize: '12px', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>Reported</th>
-                <th style={{ padding: '5px', textAlign: 'center', fontSize: '12px', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeTickets.map(ticket => (
-                <tr key={ticket.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td
-                    style={{ padding: '5px', cursor: 'pointer' }}
-                    onClick={() => openDetailModal(ticket)}
-                  >
-                    <p style={{ fontWeight: '600', color: '#1e293b', margin: '0 0 3px 0', lineHeight: '1.5', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                      {ticket.category}
-                      {(ticket.imageUrls && ticket.imageUrls.length > 0) && (
-                        <Camera size={14} color="#64748b" title={`${ticket.imageUrls.length} photo(s)`} />
-                      )}
-                    </p>
-                    <p style={{ fontSize: '13px', color: '#64748b', margin: '3px 0 3px 0', lineHeight: '1.5', display: 'flex', alignItems: 'center', gap: '2px', flexWrap: 'wrap' }}>
-                      📍 {ticket.location} <PriorityBadge priority={ticket.priority} />
-                      {ticket.submittedBy && <span style={{ color: '#6b7280' }}>👤 {getDisplayName(ticket.submittedBy)}</span>}
-                    </p>
-                    <p style={{ fontSize: '10px', color: '#94a3b8', margin: '3px 0 0 0', lineHeight: '1.5' }}>Click to view details</p>
-                  </td>
-                  <td style={{ padding: '5px', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0px' }}>
-                      <StatusBadge status={ticket.status} />
-                      {ticket.status === 'in_progress' && ticket.startedAt && (
-                        <span style={{ fontSize: '10px', color: '#6b7280' }}>
-                          {ticket.startedByName || getDisplayName(ticket.assignedTo)} • {getTimeElapsed(ticket.startedAt)}
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td style={{ padding: '5px', textAlign: 'center', fontSize: '13px', color: '#64748b' }}>
-                    {new Date(ticket.createdAt).toLocaleDateString()}
-                  </td>
-                  <td style={{ padding: '5px', textAlign: 'center' }}>
-                    {/* If Open: Show BOTH Start and Quick Complete */}
-                    {ticket.status === 'open' && (
-                      <div className="action-buttons">
-                        <button
-                          onClick={() => startJob(ticket.id)}
-                          style={{ padding: '8px 14px', backgroundColor: '#4f46e5', color: 'white', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '500', cursor: 'pointer' }}
-                          title="Start Timer (Long Job)"
-                        >
-                          🔧 Start
-                        </button>
-                        <button
-                          onClick={() => openCompletionModal(ticket)}
-                          style={{ padding: '8px 14px', backgroundColor: 'white', border: '2px solid #10b981', color: '#10b981', borderRadius: '6px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
-                          title="Mark Done Immediately (Quick Fix)"
-                        >
-                          ⚡ Quick Fix
-                        </button>
-                      </div>
-                    )}
+          <div className="divide-y divide-slate-100">
+            {activeTickets.map(ticket => (
+              <div key={ticket.id} className="p-4 hover:bg-slate-50 transition-colors flex flex-col md:flex-row gap-4 items-start md:items-center">
+                <div className="flex-1 cursor-pointer" onClick={() => { setDetailTicket(ticket); setShowDetailModal(true); }}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-semibold text-slate-800">{ticket.category}</span>
+                    {ticket.imageUrls?.length > 0 && <Camera size={14} className="text-slate-400" />}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span className="flex items-center gap-1"><MapPin size={12}/> {ticket.location}</span>
+                    <PriorityBadge priority={ticket.priority} />
+                  </div>
+                </div>
 
-                    {/* If In Progress: Show ONLY Complete */}
-                    {ticket.status === 'in_progress' && (
-                      <button onClick={() => openCompletionModal(ticket)} style={{ padding: '10px 18px', backgroundColor: '#d97706', color: 'white', border: 'none', borderRadius: '6px', fontSize: '14px', fontWeight: '500', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                        ✓ Complete
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+                   <div className="flex flex-col items-end gap-1">
+                     <StatusBadge status={ticket.status} />
+                     {ticket.status === 'in_progress' && (
+                       <span className="text-[10px] text-amber-700 font-medium flex items-center gap-1">
+                         <Clock size={10}/> {getTimeElapsed(ticket.startedAt)}
+                       </span>
+                     )}
+                   </div>
+
+                   <div className="flex gap-2">
+                     {ticket.status === 'open' && (
+                       <>
+                         <button onClick={() => startJob(ticket.id)} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700">
+                           Start Job
+                         </button>
+                         <button onClick={() => { setSelectedTicket(ticket); setShowCompletionModal(true); }} className="px-3 py-1.5 border border-emerald-500 text-emerald-600 rounded-lg text-xs font-bold hover:bg-emerald-50">
+                           Quick Fix
+                         </button>
+                       </>
+                     )}
+                     {ticket.status === 'in_progress' && (
+                       <button onClick={() => { setSelectedTicket(ticket); setShowCompletionModal(true); }} className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1">
+                         <CheckCircle size={12}/> Mark Done
+                       </button>
+                     )}
+                   </div>
+                </div>
+              </div>
+            ))}
           </div>
-        )}
-
-        {showCompletionModal && (
-          <CompletionModal
-            isOpen={showCompletionModal}
-            onClose={() => { setShowCompletionModal(false); setSelectedTicket(null); }}
-            ticket={selectedTicket}
-            onComplete={completeTask}
-          />
-        )}
-
-        {showDetailModal && (
-          <TicketDetailModal
-            isOpen={showDetailModal}
-            onClose={() => { setShowDetailModal(false); setDetailTicket(null); }}
-            ticket={detailTicket}
-            getDisplayName={getDisplayName}
-            getTimeElapsed={getTimeElapsed}
-          />
         )}
       </div>
 
-      {/* Upcoming Scheduled Maintenance Card */}
+      {/* Scheduled Tasks Card */}
       {scheduledTasks.length > 0 && (
-        <div style={{ padding: '16px', backgroundColor: 'white', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
-          <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1e293b', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Calendar style={{ height: '20px', width: '20px', color: '#4f46e5' }} /> Upcoming Scheduled Maintenance
-          </h2>
-          <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '16px' }}>Scheduled tasks created by Head Management</p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {scheduledTasks.map(task => {
-              const nextRunDate = task.nextRun?.toDate ? task.nextRun.toDate() : new Date();
-              const formattedDate = nextRunDate.toLocaleDateString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                ...(nextRunDate.getFullYear() !== new Date().getFullYear() && { year: 'numeric' })
-              });
-
-              return (
-                <div key={task.id} style={{
-                  padding: '16px',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '8px',
-                  backgroundColor: '#f8fafc',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '8px'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div style={{ flex: 1 }}>
-                      <h3 style={{ fontSize: '16px', fontWeight: '600', color: '#1e293b', marginBottom: '4px' }}>
-                        {task.category}
-                      </h3>
-                      <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '6px' }}>
-                        {task.description || 'No description provided'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '13px', color: '#6b7280' }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <RefreshCw size={14} />
-                        Every {task.frequencyDays || '?'} days
-                      </span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <MapPin size={14} />
-                        {task.locations?.length || 0} locations
-                      </span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        📅 Next: {formattedDate}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+           <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+             <Calendar className="w-5 h-5 text-indigo-600" /> Upcoming Schedules
+           </h3>
+           <div className="grid gap-3">
+             {scheduledTasks.slice(0, 3).map(task => (
+               <div key={task.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
+                 <div>
+                   <p className="font-semibold text-slate-700 text-sm">{task.category}</p>
+                   <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                     <RefreshCw size={10}/> Every {task.frequencyDays} days
+                     <span className="w-1 h-1 bg-slate-300 rounded-full"/>
+                     {task.locations?.length} locations
+                   </p>
+                 </div>
+                 <div className="text-right">
+                   <p className="text-xs font-bold text-indigo-600 uppercase">Next Due</p>
+                   <p className="text-sm font-medium text-slate-800">
+                     {task.nextRun?.toDate ? task.nextRun.toDate().toLocaleDateString() : 'N/A'}
+                   </p>
+                 </div>
+               </div>
+             ))}
+           </div>
         </div>
       )}
+
+      {/* Modals */}
+      <CompletionModal isOpen={showCompletionModal} onClose={() => setShowCompletionModal(false)} ticket={selectedTicket} onComplete={completeTask} />
+      <TicketDetailModal isOpen={showDetailModal} onClose={() => setShowDetailModal(false)} ticket={detailTicket} getDisplayName={getDisplayName} getTimeElapsed={getTimeElapsed} />
+
     </div>
   );
 }
