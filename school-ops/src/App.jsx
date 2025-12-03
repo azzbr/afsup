@@ -47,12 +47,27 @@ export default function App() {
         try {
           const result = await getUserData(u.uid);
           if (result.success) {
-            setUserData(result.data);
+            const data = result.data;
+
+            // --- SECURITY PATCH: BLOCK PENDING USERS ---
+            // If user is pending or blocked (and not the super admin), kick them out.
+            if (data.status !== 'approved' && data.role !== 'admin') {
+               alert("Access Denied: Your account is pending approval by an administrator.");
+               await signOutUser(); // Log them out immediately
+               setUser(null);
+               setUserData(null);
+               setActiveRole(ROLES.STAFF);
+               setAuthLoading(false);
+               return; // Stop execution
+            }
+            // -------------------------------------------
+
+            setUserData(data);
 
             // AUTO-SWITCH ROLE based on permission
-            if (result.data.viewAll || result.data.role === 'admin') {
+            if (data.viewAll || data.role === 'admin') {
                setActiveRole(ROLES.ADMIN);
-            } else if (result.data.role === 'maintenance') {
+            } else if (data.role === 'maintenance') {
                setActiveRole(ROLES.MAINTENANCE);
             } else {
                setActiveRole(ROLES.STAFF);

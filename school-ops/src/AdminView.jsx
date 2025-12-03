@@ -339,9 +339,17 @@ export default function AdminView({ tickets, user, userData, onCreateSchedule, o
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {allUsers.map((u) => (
-                  <tr key={u.id}>
-                    <td className="px-6 py-4 font-medium text-slate-700">{u.email}</td>
+                {allUsers.map((u) => {
+                  // --- SAFETY PATCH: IDENTIFY CURRENT USER ---
+                  const isCurrentUser = user && u.id === user.uid;
+                  // -------------------------------------------
+
+                  return (
+                  <tr key={u.id} className={isCurrentUser ? "bg-indigo-50/30" : ""}>
+                    <td className="px-6 py-4 font-medium text-slate-700 flex items-center gap-1">
+                      {u.email}
+                      {isCurrentUser && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200">YOU</span>}
+                    </td>
                     <td className="px-6 py-4 text-center relative">
                       <button
                         onClick={() => setOpenDropdown(openDropdown === u.id ? null : u.id)}
@@ -392,19 +400,23 @@ export default function AdminView({ tickets, user, userData, onCreateSchedule, o
                         <Loader2 className="w-5 h-5 animate-spin text-indigo-600" />
                       ) : (
                         <>
-                          {u.status !== 'approved' && (
-                            <button onClick={() => updateUser(u.id, 'approved')} className="text-emerald-600 hover:bg-emerald-50 p-1.5 rounded" title="Approve User">
-                              <CheckCircle size={16} />
-                            </button>
+                          {!isCurrentUser && (
+                            <>
+                              {u.status !== 'approved' && (
+                                <button onClick={() => updateUser(u.id, 'approved')} className="text-emerald-600 hover:bg-emerald-50 p-1.5 rounded" title="Approve User">
+                                  <CheckCircle size={16} />
+                                </button>
+                              )}
+                              {u.status !== 'blocked' && (
+                                <button onClick={() => updateUser(u.id, 'blocked')} className="text-amber-600 hover:bg-amber-50 p-1.5 rounded" title="Block User">
+                                  <Pause size={16} />
+                                </button>
+                              )}
+                              <button onClick={() => deleteUser(u.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Delete User">
+                                <Trash2 size={16} />
+                              </button>
+                            </>
                           )}
-                          {u.status !== 'blocked' && (
-                            <button onClick={() => updateUser(u.id, 'blocked')} className="text-amber-600 hover:bg-amber-50 p-1.5 rounded" title="Block User">
-                              <Pause size={16} />
-                            </button>
-                          )}
-                          <button onClick={() => deleteUser(u.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Delete User">
-                            <Trash2 size={16} />
-                          </button>
                         </>
                       )}
                     </td>
