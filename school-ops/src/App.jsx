@@ -1,5 +1,6 @@
+// CHANGE: Import 'query' and 'where' to filter tickets for staff
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, deleteDoc, doc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, deleteDoc, doc, addDoc, serverTimestamp, query, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { initializeAuth, signInAsAnonymous, onAuthStateChange, getUserData, signOutUser } from './auth';
 import { ROLES } from './constants'; // Importing from new constants file
@@ -89,14 +90,38 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- 2. Ticket Fetching ---
+  // --- 2. Ticket Fetching (SECURE VERSION) ---
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'maintenance_tickets'), (snap) => {
+    // We only fetch tickets if we know the user's role (authLoading is false)
+    if (authLoading) return;
+
+    let q;
+    const collectionRef = collection(db, 'maintenance_tickets');
+
+    // SECURITY LOGIC:
+    // 1. Admins & Maintenance can see EVERYTHING.
+    // 2. Staff/Guests can ONLY see tickets THEY created.
+    // 3. If we try to query ALL tickets as a Staff, the Rules will block it (Crash).
+
+    if (userData && (userData.role === 'admin' || userData.role === 'maintenance')) {
+        // Fetch all tickets
+        q = collectionRef;
+    } else if (user) {
+        // Fetch only MY tickets (satisfies rule: resource.data.reportedBy == request.auth.uid)
+        q = query(collectionRef, where('reportedBy', '==', user.uid));
+    } else {
+        // No user? No tickets.
+        setTickets([]);
+        return;
+    }
+
+    const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({
         id: d.id,
         ...d.data(),
         createdAt: d.data().createdAt?.toDate() || new Date()
       }));
+
       // Sort: Open first, then new to old
       data.sort((a, b) => {
         if (a.status === 'resolved' && b.status !== 'resolved') return 1;
@@ -104,9 +129,16 @@ export default function App() {
         return b.createdAt - a.createdAt;
       });
       setTickets(data);
+    }, (error) => {
+        // Handle permission errors gracefully
+        console.error("Ticket fetch error (likely permissions):", error);
+        if (error.code === 'permission-denied') {
+            setTickets([]); // Clear tickets rather than crashing
+        }
     });
+
     return () => unsub();
-  }, []);
+  }, [user, userData, authLoading]); // Re-run when user or role changes
 
   // --- 3. Handlers ---
   const handleCreateSchedule = async (data) => {

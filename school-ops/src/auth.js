@@ -1,7 +1,8 @@
 // Import Firestore for user management
 import { signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { auth } from './firebase';
-import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+// CHANGE: Imported getDoc instead of query/where logic for fetching user
+import { doc, setDoc, getDoc, collection } from 'firebase/firestore';
 import { db } from './firebase';
 
 // Anonymous authentication for public reporting
@@ -88,14 +89,18 @@ export const createUserAccount = async (email, password) => {
   }
 };
 
-// Get user data from Firestore
+// --- FIX: Get user data using Document Reference (Secure) ---
 export const getUserData = async (uid) => {
   try {
-    const userDoc = await getDocs(query(collection(db, 'users'), where('uid', '==', uid)));
-    if (!userDoc.empty) {
-      return { success: true, data: userDoc.docs[0].data() };
+    // OLD (Insecure): query(collection(db, 'users'), where('uid', '==', uid))
+    // NEW (Secure): Direct document access
+    const userRef = doc(db, 'users', uid);
+    const userSnap = await getDoc(userRef);
+
+    if (userSnap.exists()) {
+      return { success: true, data: userSnap.data() };
     }
-    return { success: false, error: 'User not found' };
+    return { success: false, error: 'User profile not found' };
   } catch (error) {
     console.error('Error fetching user data:', error);
     return { success: false, error: error.message };
