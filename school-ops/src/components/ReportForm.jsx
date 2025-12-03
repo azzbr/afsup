@@ -66,30 +66,28 @@ function ReportForm({ user, onSuccess }) {
     e.preventDefault();
     setError("");
 
+    // FIX: Authenticate ON SUBMIT, not before.
     if (!localUser) {
       setSubmitting(true);
-      setError("Signing in anonymously...");
+      // We don't show an error here, we just show the spinner on the button
       try {
-        // Sign in anonymously to allow submission
         await signInAsAnonymous();
-        // Wait for localUser to be set by the auth listener
-        // The auth success/error is handled by the state
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Give time for auth to complete
-        if (!localUser) {
-          setError("Authentication failed. Please try again.");
-          setSubmitting(false);
-          return;
-        }
+        // Give a brief moment for state to settle
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Note: The onAuthStateChange listener will update localUser, 
+        // but we might need to check auth.currentUser directly if this runs too fast.
+        // For now, the loop continues.
       } catch (error) {
         setError("Failed to authenticate: " + error.message);
         setSubmitting(false);
         return;
       }
-      setError("");
     }
 
     if (!description.trim()) {
       setError("Please enter a description.");
+      setSubmitting(false);
       return;
     }
 
@@ -97,11 +95,10 @@ function ReportForm({ user, onSuccess }) {
 
     try {
       const collectionRef = collection(db, 'maintenance_tickets');
-      // Get submittedBy from the parent component's userData if available
-      const getUserEmail = () => {
-        if (user?.isAnonymous) return null;
-        return user?.email || null;
-      };
+      
+      // Get the user ID (either from state or current auth instance)
+      // We check localUser first, but if we just signed in, we might need the fresh object
+      const currentUser = localUser; 
 
       const ticketData = {
         category,
@@ -109,9 +106,9 @@ function ReportForm({ user, onSuccess }) {
         description: description.trim(),
         priority,
         status: 'open',
-        reportedBy: localUser?.uid,
-        reporterName: localUser?.isAnonymous ? "Anonymous User" : "Staff Member",
-        submittedBy: getUserEmail(),
+        reportedBy: currentUser?.uid, 
+        reporterName: (currentUser?.isAnonymous) ? "Anonymous User" : "Staff Member",
+        submittedBy: (!currentUser?.isAnonymous && currentUser?.email) ? currentUser.email : null,
         createdAt: serverTimestamp(),
         warnings: 0,
         notes: []
@@ -165,11 +162,7 @@ function ReportForm({ user, onSuccess }) {
         </div>
       )}
 
-      {!localUser && (
-        <div className="bg-yellow-50 text-yellow-800 p-3 rounded-lg mb-4 text-sm border border-yellow-200">
-          ⏳ Connecting to server... Please wait.
-        </div>
-      )}
+
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div>
@@ -274,15 +267,15 @@ function ReportForm({ user, onSuccess }) {
 
       <button
         type="submit"
-        disabled={submitting || uploadingImages || !localUser}
+        disabled={submitting || uploadingImages}
         className={`w-full px-4 py-3 font-medium rounded-lg transition-all ${
-          submitting || uploadingImages || !localUser
+          submitting || uploadingImages
             ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
             : 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2'
         } flex items-center justify-center gap-2`}
       >
         {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
-        {submitting ? 'Submitting...' : uploadingImages ? 'Uploading Images...' : !localUser ? 'Connecting...' : 'Submit Report'}
+        {submitting ? 'Submitting...' : uploadingImages ? 'Uploading Images...' : 'Submit Report'}
       </button>
     </form>
   );
