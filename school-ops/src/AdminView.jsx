@@ -389,10 +389,7 @@ export default function AdminView({ tickets, user, userData, onCreateSchedule, o
                       )}
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${
-                        u.status === 'approved' ? 'bg-emerald-50 text-emerald-700' :
-                        u.status === 'blocked' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'
-                      }`}>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${u.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : u.status === 'blocked' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
                         {u.status || 'pending'}
                       </span>
                     </td>
@@ -422,7 +419,8 @@ export default function AdminView({ tickets, user, userData, onCreateSchedule, o
                       )}
                     </td>
                   </tr>
-                ))}
+                );
+                })}
               </tbody>
             </table>
           </div>
@@ -461,7 +459,7 @@ export default function AdminView({ tickets, user, userData, onCreateSchedule, o
                      {s.isActive ? <Pause size={16} /> : <Play size={16} />}
                    </button>
                    <button
-                     onClick={async () => { if(confirm("Delete schedule?")) { await deleteDoc(doc(db, 'scheduled_tasks', s.id)); fetchData(); }}}
+                     onClick={async () => { if(confirm("Delete schedule?")) { await deleteDoc(doc(db, 'scheduled_tasks', s.id)); fetchData(); }}}>
                      className="p-2 bg-red-50 hover:bg-red-100 rounded-lg text-red-600"
                    >
                      <Trash2 size={16} />
