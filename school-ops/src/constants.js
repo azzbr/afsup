@@ -28,7 +28,30 @@ export const LOCATIONS = [
 ];
 
 export const ROLES = {
-  STAFF: 'Staff/Teacher',
-  MAINTENANCE: 'Maintenance Team',
-  ADMIN: 'Head Management/HR'
+  STAFF: 'staff',
+  MAINTENANCE: 'maintenance',
+  HR: 'hr',           // <-- NEW ROLE
+  ADMIN: 'admin'
+};
+
+// --- BAHRAIN HRIS CONSTANTS ---
+
+export const NATIONALITIES = [
+  "Bahraini", "Indian", "Filipino", "British", "Egyptian", "Jordanian", "Pakistani", "Other"
+];
+
+export const BAHRAIN_BANKS = [
+  "Bank of Bahrain and Kuwait (BBK)",
+  "National Bank of Bahrain (NBB)",
+  "Ila Bank",
+  "Ahli United Bank (AUB)",
+  "Kuwait Finance House (KFH)",
+  "BenefitPay (IBAN only)"
+];
+
+// Bahrain Labor Law Sick Leave Tiers
+export const SICK_LEAVE_TIERS = {
+  FULL_PAY: 15,
+  HALF_PAY: 20,
+  NO_PAY: 20
 };

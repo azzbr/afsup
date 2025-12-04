@@ -50,3 +50,17 @@ export const uploadImage = async (file, ticketId) => {
     return { success: false, error: error.message };
   }
 };
+
+// NEW: Generic File Upload (Handles PDFs & Images without compression)
+export const uploadFile = async (file, path) => {
+  try {
+    const storageRef = ref(storage, path);
+    // uploadBytes automatically detects content type
+    const snapshot = await uploadBytes(storageRef, file);
+    const downloadURL = await getDownloadURL(snapshot.ref);
+    return { success: true, downloadURL };
+  } catch (error) {
+    console.error('File upload error:', error);
+    return { success: false, error: error.message };
+  }
+};

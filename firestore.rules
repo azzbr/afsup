@@ -1,31 +1,107 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow anonymous users to create maintenance tickets
-    match /maintenance_tickets/{ticketId} {
-      allow read, write: if true;
+
+    // --- Helper Functions ---
+
+    // Check if user is logged in (anon or real)
+    function isAuthenticated() {
+      return request.auth != null;
     }
 
-    // Allow anonymous users to create scheduled tasks
-    match /scheduled_tasks/{taskId} {
-      allow read, write: if true;
+    // Check if user is a fully registered staff/admin (not anonymous)
+    function isVerifiedUser() {
+      return isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
 
-    // Users collection - authenticated users can create/read their own documents
+    // Get the user's role from their user document
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && getUserRole() == 'admin';
+    }
+
+    function isMaintenance() {
+      return isVerifiedUser() && (getUserRole() == 'maintenance' || getUserRole() == 'admin');
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Users Collection
     match /users/{userId} {
-      // Anyone can create a user document (for registration)
-      allow create: if true;
-      // Authenticated users can read all users (for admin panel)
-      allow read: if request.auth != null;
-      // Users can update their own documents, admins can update any
-      allow update, delete: if request.auth != null &&
-        (request.auth.uid == userId ||
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      // 1. User sees own profile (full access)
+      // 2. Admin sees Everyone (full access)
+      // 3. HR sees everyone EXCEPT Admins
+      // 4. Maintenance/Staff see basic info (limited to safe fields)
+      allow read: if isAuthenticated() && (
+        request.auth.uid == userId || // Own profile
+        isAdmin() || // Admin sees all
+        (getUserRole() == 'hr' && resource.data.role != 'admin') || // HR sees non-admins
+        (getUserRole() == 'maintenance' && ['staff', 'maintenance'].hasAny([resource.data.role])) ||
+        (getUserRole() == 'staff' && resource.data.role == 'staff')
+      );
+
+      // Create: Registration rules (same as before)
+      allow create: if isAuthenticated() && request.auth.uid == userId
+                    && (
+                       // Normal User: Must be pending & not admin
+                       (request.resource.data.status == 'pending' && request.resource.data.role != 'admin')
+                       ||
+                       // Super Admin Exception: Allow creating admin role if email matches
+                       (request.auth.token.email == 'admin@afs.edu.bh')
+                    );
+
+      // UPDATE RULE CHANGE: Allow Admins to update anyone. Allow Users to update THEMSELVES (but prevent them from changing their role/status)
+      allow update: if isAdmin()
+                    || (isAuthenticated() && request.auth.uid == userId
+                        // Prevent user from changing their own role or status to 'admin'/'approved'
+                        && request.resource.data.role == resource.data.role
+                        && request.resource.data.status == resource.data.status);
+
+      allow delete: if isAdmin();
     }
 
-    // Allow access to Firebase Storage for authenticated users
-    match /{document=**} {
-      allow read, write: if request.auth != null;
+    // 2. Maintenance Tickets
+    match /maintenance_tickets/{ticketId} {
+      // Admins and Maintenance see all.
+      // Regular users/Anonymous can see tickets they created (if persisted).
+      allow read: if isAdmin() || isMaintenance() ||
+                  (isAuthenticated() && resource.data.reportedBy == request.auth.uid);
+
+      // Anyone (including anonymous guests) can create a ticket.
+      allow create: if isAuthenticated();
+
+      // Updates:
+      // Maintenance/Admins can update status, assign, add notes.
+      // Regular users CANNOT update tickets once sent (prevents tampering).
+      allow update: if isAdmin() || isMaintenance();
+
+      // Only Admins can delete tickets.
+      allow delete: if isAdmin();
+    }
+
+    // 3. Scheduled Tasks (Backend/Admin only)
+    match /scheduled_tasks/{taskId} {
+      allow read, write: if isAdmin();
+    }
+
+    // 4. Leave Requests Collection
+    match /leave_requests/{requestId} {
+      // READ: Author can see own requests, Admins see all
+      allow read: if isAdmin() ||
+                  (isAuthenticated() && resource.data.userId == request.auth.uid);
+
+      // CREATE: Authenticated users can create leave requests for themselves
+      allow create: if isAuthenticated() &&
+                    request.auth.uid == request.resource.data.userId;
+
+      // UPDATE: Admins can update status. Authors CANNOT update requests once submitted.
+      allow update: if isAdmin();
+
+      // DELETE: Admins only
+      allow delete: if isAdmin();
     }
   }
 }

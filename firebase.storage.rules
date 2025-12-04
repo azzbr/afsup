@@ -1,0 +1,35 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Check if user is logged in
+    function isAuth() { return request.auth != null; }
+
+    // Check if file is image OR pdf
+    function isValidType() {
+      return request.resource.contentType.matches('image/.*') ||
+             request.resource.contentType == 'application/pdf';
+    }
+
+    // Limit size to 5MB
+    function isSmallEnough() { return request.resource.size < 5 * 1024 * 1024; }
+
+    // MAINTENANCE IMAGES (Public read for staff)
+    match /ticket-images/{fileName} {
+      allow read: if isAuth();
+      allow create: if isAuth() && isValidType() && isSmallEnough();
+    }
+
+    // --- HR DOCUMENTS (SECURE VAULT) ---
+    // Structure: hr-documents/{userId}/{filename}
+    match /hr-documents/{userId}/{fileName} {
+      // 1. READ: User can read OWN files. Admins can read ALL.
+      allow read: if isAuth() && (request.auth.uid == userId ||
+                  firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin');
+
+      // 2. WRITE: User can upload to THEIR OWN folder only.
+      allow write: if isAuth() && request.auth.uid == userId
+                   && isValidType() && isSmallEnough();
+    }
+  }
+}

@@ -61,13 +61,16 @@ export const onAuthStateChange = (callback) => {
 const SUPER_ADMIN_EMAIL = 'admin@afs.edu.bh';
 
 // User registration with Firestore user record
-export const createUserAccount = async (email, password) => {
+export const createUserAccount = async (email, password, nameData) => {
   try {
     // Create Firebase Auth user
     const result = await createUserWithEmailAndPassword(auth, email, password);
 
     // Check if this is the super admin account
     const isSuperAdmin = email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+
+    // Construct the full name for display
+    const fullName = `${nameData.firstName} ${nameData.middleName ? nameData.middleName + ' ' : ''}${nameData.lastName}`;
 
     // Create user record in Firestore
     const userDoc = {
@@ -77,7 +80,43 @@ export const createUserAccount = async (email, password) => {
       status: isSuperAdmin ? 'approved' : 'pending', // Super admin is auto-approved
       viewAll: isSuperAdmin ? true : false, // Super admin can view all dashboards
       createdAt: new Date(),
-      isActive: true
+      isActive: true,
+
+      // --- BAHRAIN HR FIELDS (BASIC) ---
+      firstName: nameData.firstName,
+      middleName: nameData.middleName || '',
+      lastName: nameData.lastName,
+      arabicName: '', // For GOSI & Ministry contracts
+      displayName: fullName,
+      nationality: 'Bahraini', // Default - user can change later
+      gender: 'Male', // Default
+      maritalStatus: 'Single', // Affects visa eligibility
+
+      // --- DOCUMENTS ---
+      cprNumber: '', // 9-digit CPR
+      cprExpiry: null,
+      passportNumber: '',
+      passportExpiry: null,
+
+      // --- VISA (Only for non-Bahrainis) ---
+      residencePermitNumber: '',
+      residencePermitExpiry: null,
+      workPermitNumber: '',
+
+      // --- BANKING (WPS) ---
+      iban: 'BH', // Bahrain IBAN starts with BH
+      bankName: 'National Bank of Bahrain (NBB)', // Popular choice
+
+      // --- EMPLOYMENT ---
+      dateOfJoining: null,
+      sickDaysUsed: 0, // Bahrain Labor Law tracking
+      annualLeaveBalance: 30, // Standard 30 days/year
+
+      // --- CONTACT ---
+      phoneNumber: '',
+
+      // --- OLD PLACEHOLDERS (keeping for migration) ---
+      dateOfJoining: null
     };
 
     await setDoc(doc(db, 'users', result.user.uid), userDoc);

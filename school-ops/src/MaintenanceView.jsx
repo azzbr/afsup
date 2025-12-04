@@ -226,7 +226,7 @@ function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
 
 // --- Main Component ---
 
-export default function MaintenanceView({ tickets, user, userData }) {
+export default function MaintenanceView({ tickets = [], user, userData }) {
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);

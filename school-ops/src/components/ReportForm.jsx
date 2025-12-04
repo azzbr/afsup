@@ -1,13 +1,46 @@
 import React, { useState, useEffect } from 'react';
 import {
   Image as ImageIcon,
-  X
+  X,
+  Upload,
+  AlertTriangle,
+  CheckCircle,
+  Camera,
+  FileText,
+  MapPin,
+  Tag,
+  Loader2,
+  Plus
 } from 'lucide-react';
 import { compressImage, uploadImage } from '../storage';
 import { db } from '../firebase';
-import { collection, addDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { signInAsAnonymous, onAuthStateChange } from '../auth';
 import { ISSUE_CATEGORIES, LOCATIONS } from '../constants';
+
+// ============================================================================
+// PRIORITY CHIP COMPONENT (HR-Style)
+// ============================================================================
+
+const PriorityChip = ({ value, label, isSelected, onClick, colorClass }) => {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-all duration-200 border-2 
+        ${isSelected 
+          ? `${colorClass} shadow-sm scale-105` 
+          : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+        }`}
+    >
+      {label}
+    </button>
+  );
+};
+
+// ============================================================================
+// MAIN REPORT FORM COMPONENT
+// ============================================================================
 
 function ReportForm({ user, onSuccess }) {
   const [localUser, setLocalUser] = useState(user);
@@ -35,6 +68,11 @@ function ReportForm({ user, onSuccess }) {
 
   const handleImageSelect = async (e) => {
     const files = Array.from(e.target.files);
+    await processFiles(files);
+    e.target.value = null;
+  };
+
+  const processFiles = async (files) => {
     if (files.length + selectedFiles.length > 5) {
       alert("Maximum 5 images allowed per report.");
       return;
@@ -55,7 +93,6 @@ function ReportForm({ user, onSuccess }) {
     }
 
     setSelectedFiles(prev => [...prev, ...compressedFiles]);
-    e.target.value = null;
   };
 
   const removeImage = (index) => {
@@ -66,18 +103,11 @@ function ReportForm({ user, onSuccess }) {
     e.preventDefault();
     setError("");
 
-    // FIX: Authenticate ON SUBMIT, not before.
     if (!localUser) {
       setSubmitting(true);
-      // We don't show an error here, we just show the spinner on the button
       try {
         await signInAsAnonymous();
-        // Give a brief moment for state to settle
         await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Note: The onAuthStateChange listener will update localUser, 
-        // but we might need to check auth.currentUser directly if this runs too fast.
-        // For now, the loop continues.
       } catch (error) {
         setError("Failed to authenticate: " + error.message);
         setSubmitting(false);
@@ -95,9 +125,6 @@ function ReportForm({ user, onSuccess }) {
 
     try {
       const collectionRef = collection(db, 'maintenance_tickets');
-      
-      // Get the user ID (either from state or current auth instance)
-      // We check localUser first, but if we just signed in, we might need the fresh object
       const currentUser = localUser; 
 
       const ticketData = {
@@ -154,31 +181,60 @@ function ReportForm({ user, onSuccess }) {
     }
   };
 
+  // Priority options with HR-style colors
+  const priorityOptions = [
+    { value: 'low', label: 'Low', colorClass: 'bg-slate-100 border-slate-300 text-slate-700' },
+    { value: 'medium', label: 'Medium', colorClass: 'bg-blue-50 border-blue-300 text-blue-700' },
+    { value: 'high', label: 'High', colorClass: 'bg-orange-50 border-orange-300 text-orange-700' },
+    { value: 'critical', label: 'Critical', colorClass: 'bg-red-50 border-red-400 text-red-700' }
+  ];
+
   return (
-    <form onSubmit={handleSubmit}>
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {/* Error Alert */}
       {error && (
-        <div className="bg-red-50 text-red-700 p-3 rounded-lg mb-4 text-sm border border-red-200">
-          {error}
+        <div className="flex items-start gap-3 bg-red-50 text-red-700 p-4 rounded-xl border border-red-200">
+          <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-sm">Error</p>
+            <p className="text-sm mt-0.5">{error}</p>
+          </div>
         </div>
       )}
 
-
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      {/* Row 1: Category & Location */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Category */}
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Issue Category</label>
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+            <span className="flex items-center gap-1.5">
+              <Tag size={12} className="text-indigo-500" />
+              Issue Category
+            </span>
+          </label>
           <select
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 
+              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:bg-white 
+              transition-all cursor-pointer"
             value={category}
             onChange={(e) => setCategory(e.target.value)}
           >
             {ISSUE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
+
+        {/* Location */}
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Location</label>
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+            <span className="flex items-center gap-1.5">
+              <MapPin size={12} className="text-indigo-500" />
+              Location
+            </span>
+          </label>
           <select
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 
+              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:bg-white 
+              transition-all cursor-pointer"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
           >
@@ -187,95 +243,132 @@ function ReportForm({ user, onSuccess }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      {/* Row 2: Priority + Photo Upload (Side by Side) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Priority Selection */}
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">Priority</label>
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              { value: 'low', label: 'Low', color: 'text-slate-600' },
-              { value: 'medium', label: 'Medium', color: 'text-slate-600' },
-              { value: 'high', label: 'High', color: 'text-slate-600' },
-              { value: 'critical', label: 'Critical', color: 'text-red-600 font-medium' }
-            ].map(({ value, label, color }) => (
-              <label key={value} className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 px-2 py-1 rounded">
-                <input
-                  type="radio"
-                  name="priority"
-                  value={value}
-                  checked={priority === value}
-                  onChange={(e) => setPriority(e.target.value)}
-                  className="sr-only"
-                />
-                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${priority === value ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300'}`}>
-                  {priority === value && <div className="w-2 h-2 rounded-full bg-indigo-500"></div>}
-                </div>
-                <span className={`text-sm ${color}`}>{label}</span>
-              </label>
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+            <span className="flex items-center gap-1.5">
+              <AlertTriangle size={12} className="text-indigo-500" />
+              Priority
+            </span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {priorityOptions.map((opt) => (
+              <PriorityChip
+                key={opt.value}
+                value={opt.value}
+                label={opt.label}
+                isSelected={priority === opt.value}
+                onClick={() => setPriority(opt.value)}
+                colorClass={opt.colorClass}
+              />
             ))}
           </div>
         </div>
+
+        {/* Compact Photo Upload */}
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">Photo Evidence (Optional) - Max 5 images</label>
-          <div className="space-y-3">
-            <label className="cursor-pointer flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg bg-white hover:bg-slate-50 transition-colors w-fit">
-              <ImageIcon className="w-4 h-4 text-slate-600" />
-              <span className="text-sm text-slate-700">Add Photos</span>
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+            <span className="flex items-center gap-1.5">
+              <Camera size={12} className="text-indigo-500" />
+              Photos
+              <span className="font-normal text-slate-400">(Optional)</span>
+            </span>
+          </label>
+          
+          <div className="flex items-center gap-3">
+            {/* Upload Button */}
+            <label className="relative cursor-pointer">
+              <div className={`w-12 h-12 rounded-xl border-2 border-dashed flex items-center justify-center transition-all
+                ${selectedFiles.length >= 5 
+                  ? 'border-slate-200 bg-slate-50 cursor-not-allowed' 
+                  : 'border-slate-300 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50'
+                }`}>
+                <Plus size={20} className={selectedFiles.length >= 5 ? 'text-slate-300' : 'text-slate-400'} />
+              </div>
               <input
                 type="file"
                 multiple
                 accept="image/*"
                 className="hidden"
                 onChange={handleImageSelect}
+                disabled={selectedFiles.length >= 5}
               />
             </label>
-            {selectedFiles.length > 0 && (
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-w-xs">
+
+            {/* Image Previews (inline) */}
+            {selectedFiles.length > 0 ? (
+              <div className="flex items-center gap-2 overflow-x-auto">
                 {selectedFiles.map((file, index) => (
-                  <div key={index} className="relative">
+                  <div key={index} className="relative shrink-0 group">
                     <img
                       src={file}
                       alt={`Preview ${index + 1}`}
-                      className="w-20 h-20 object-cover rounded-lg border border-slate-200"
+                      className="w-12 h-12 object-cover rounded-xl border-2 border-slate-200"
                     />
                     <button
                       type="button"
                       onClick={() => removeImage(index)}
-                      className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 hover:bg-red-600 text-white rounded-full flex items-center justify-center text-xs transition-colors"
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 hover:bg-red-600 text-white 
+                        rounded-full flex items-center justify-center shadow-md transition-colors"
                       aria-label={`Remove image ${index + 1}`}
                     >
-                      ×
+                      <X size={12} />
                     </button>
                   </div>
                 ))}
+                <span className="text-xs text-slate-400 shrink-0">{selectedFiles.length}/5</span>
               </div>
+            ) : (
+              <span className="text-xs text-slate-400">Add up to 5 photos</span>
             )}
-            <div className="text-xs text-slate-500">{selectedFiles.length}/5 photos selected</div>
           </div>
         </div>
       </div>
 
-      <div className="mb-4">
-        <label className="block text-sm font-medium text-slate-700 mb-1">Description *</label>
+      {/* Row 3: Description (Full Width) */}
+      <div>
+        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+          <span className="flex items-center gap-1.5">
+            <FileText size={12} className="text-indigo-500" />
+            Description
+            <span className="text-red-500">*</span>
+          </span>
+        </label>
         <textarea
           required
-          className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[96px] resize-y"
-          placeholder="Please describe the issue in detail..."
+          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 
+            placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 
+            focus:bg-white transition-all min-h-[140px] resize-y"
+          placeholder="Please describe the issue in detail. Include any relevant information that would help the maintenance team..."
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
       </div>
 
+      {/* Submit Button */}
       <button
         type="submit"
         disabled={submitting || uploadingImages}
-        className={`w-full px-4 py-3 font-medium rounded-lg transition-all ${
-          submitting || uploadingImages
-            ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-            : 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2'
-        } flex items-center justify-center gap-2`}
+        className={`w-full px-6 py-3.5 font-semibold rounded-xl transition-all duration-200 
+          flex items-center justify-center gap-2 text-sm shadow-sm
+          ${submitting || uploadingImages
+            ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+            : 'bg-slate-900 text-white hover:bg-slate-800 hover:shadow-md active:scale-[0.99]'
+          }`}
       >
-        {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
-        {submitting ? 'Submitting...' : uploadingImages ? 'Uploading Images...' : 'Submit Report'}
+        {submitting || uploadingImages ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            {uploadingImages ? 'Uploading Photos...' : 'Submitting...'}
+          </>
+        ) : (
+          <>
+            <CheckCircle className="w-4 h-4" />
+            Submit Report
+          </>
+        )}
       </button>
     </form>
   );

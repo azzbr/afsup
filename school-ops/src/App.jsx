@@ -9,9 +9,11 @@ import { ROLES } from './constants'; // Importing from new constants file
 import Layout from './Layout';
 import MaintenanceView from './MaintenanceView';
 import AdminView from './AdminView';
+import UserProfile from './UserProfile';
 import ReportForm from './components/ReportForm';
 import EnhancedScheduleForm from './enhanced_scheduler';
 import LoginModal from './components/LoginModal';
+import HRSystem from './HRsys/HRSystem';
 
 import { Loader2 } from 'lucide-react';
 
@@ -179,6 +181,11 @@ export default function App() {
   }
 
   // --- 5. Main Render ---
+  // --- Profile Navigation Handler ---
+  const handleProfileClick = () => {
+    setActiveRole('profile');
+  };
+
   return (
     <Layout
       user={user}
@@ -187,44 +194,62 @@ export default function App() {
       setActiveRole={setActiveRole}
       onSignOut={signOutUser}
       onLoginClick={() => setShowLoginModal(true)}
+      onProfileClick={handleProfileClick}
     >
-      {/* Header Section */}
-      <div className="mb-8">
-        <h1 className="text-2xl md:text-3xl font-bold text-slate-900">
-          {activeRole === ROLES.ADMIN ? 'Admin Overview' :
-           activeRole === ROLES.MAINTENANCE ? 'Maintenance Queue' :
-           'Support Portal'}
-        </h1>
-        <p className="text-slate-500 mt-1">
-          {activeRole === ROLES.STAFF ? 'Submit maintenance requests and track their status.' :
-           'Manage school operations and maintenance tasks.'}
-        </p>
-      </div>
+      {/* Header Section - Hidden for Staff/Submit view */}
+      {activeRole !== ROLES.STAFF && (
+        <div className="mb-8">
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900">
+            {activeRole === ROLES.ADMIN ? 'Admin Overview' :
+             activeRole === ROLES.HR ? 'HR Management' :
+             activeRole === ROLES.MAINTENANCE ? 'Maintenance Queue' :
+             activeRole === 'profile' ? 'My Profile' :
+             activeRole === 'user_info' ? 'User Information' :
+             'Support Portal'}
+          </h1>
+          <p className="text-slate-500 mt-1">
+            {activeRole === 'profile' ? 'View and update your personal information, documents, and requests.' :
+             activeRole === 'user_info' ? 'Staff directory and contact information.' :
+             'Manage school operations and maintenance tasks.'}
+          </p>
+        </div>
+      )}
 
-      {/* --- CONTENT SWITCHER --- */}
+      {/* --- NEW CONTENT SWITCHER - RBAC ROUTING --- */}
 
-      {/* 1. STAFF VIEW (Everyone can see this) */}
+      {/* 1. STAFF VIEW */}
       {activeRole === ROLES.STAFF && (
-        <div className="max-w-2xl mx-auto">
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-              <h2 className="text-lg font-semibold text-slate-900">Submit New Request</h2>
-              <p className="text-sm text-slate-500">Please provide details about the issue.</p>
-            </div>
-            <div className="p-6">
-              {/* We need to refactor ReportForm to separate file next, but for now passing inline props */}
-              <ReportForm user={user} onSuccess={() => alert('Report Submitted!')} />
+        <>
+          {/* Main Content: Report Form */}
+          <div className="max-w-2xl mx-auto">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+                <h2 className="text-lg font-semibold text-slate-900">Submit New Request</h2>
+                <p className="text-sm text-slate-500">Please provide details about the issue.</p>
+              </div>
+              <div className="p-6">
+                <ReportForm user={user} onSuccess={() => alert('Report Submitted!')} />
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
 
       {/* 2. MAINTENANCE VIEW */}
       {isAuthenticated && activeRole === ROLES.MAINTENANCE && (
-        <MaintenanceView tickets={tickets} user={user} userData={userData} />
+        <>
+          {/* Maintenance Ticket Board */}
+          <MaintenanceView tickets={tickets} user={user} userData={userData} />
+
+          {/* Directory View (Using AdminView but it will be read-only due to logic above) */}
+          <div className="mt-8">
+            <h3 className="text-lg font-bold mb-4">Staff Directory</h3>
+            <AdminView user={user} userData={userData} activeTab="users" />
+          </div>
+        </>
       )}
 
-      {/* 3. ADMIN VIEW */}
+      {/* 3. ADMIN VIEW (Full Management Dashboard) */}
       {isAuthenticated && activeRole === ROLES.ADMIN && (
         <AdminView
           tickets={tickets}
@@ -233,6 +258,19 @@ export default function App() {
           onCreateSchedule={() => setShowScheduleForm(true)}
           onDeleteTicket={handleDeleteTicket}
         />
+      )}
+
+      {/* 4. USER INFORMATION / HR SYSTEM VIEW */}
+      {isAuthenticated && (activeRole === 'user_info' || activeRole === ROLES.HR) && (
+        <HRSystem
+          user={user}
+          userData={userData}
+        />
+      )}
+
+      {/* 5. PROFILE VIEW (Authenticated users only) */}
+      {isAuthenticated && activeRole === 'profile' && (
+        <UserProfile userData={userData} user={user} />
       )}
 
       {/* --- MODALS --- */}

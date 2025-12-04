@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LogIn } from 'lucide-react';
+import { User, Mail, Lock } from 'lucide-react'; // Add icons for better UX
 import { signInWithCredentials, createUserAccount } from '../auth';
 
 function LoginModal({ isOpen, onClose }) {
@@ -7,6 +7,9 @@ function LoginModal({ isOpen, onClose }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [middleName, setMiddleName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -46,8 +49,17 @@ function LoginModal({ isOpen, onClose }) {
       return;
     }
 
+    // Validate name fields
+    if (!firstName.trim() || !lastName.trim()) {
+      setError("First and Last Name are required.");
+      setLoading(false);
+      return;
+    }
+
     try {
-      const result = await createUserAccount(email, password);
+      const nameData = { firstName: firstName.trim(), middleName: middleName.trim(), lastName: lastName.trim() };
+      // Pass nameData to the updated function
+      const result = await createUserAccount(email, password, nameData);
 
       if (result.success) {
         setError('');
@@ -71,6 +83,9 @@ function LoginModal({ isOpen, onClose }) {
       setEmail('');
       setPassword('');
       setConfirmPassword('');
+      setFirstName('');
+      setMiddleName('');
+      setLastName('');
       setError('');
       setActiveTab('login');
     }
@@ -157,6 +172,45 @@ function LoginModal({ isOpen, onClose }) {
           </form>
         ) : (
           <form onSubmit={handleRegister} className="space-y-4">
+
+            {/* --- NEW NAME SECTION --- */}
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">First Name *</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                    placeholder="As per Passport"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Last Name *</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                    placeholder="Surname/Family"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Middle Name (Optional)</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                  placeholder="Father's name etc."
+                  value={middleName}
+                  onChange={(e) => setMiddleName(e.target.value)}
+                />
+              </div>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
               <input

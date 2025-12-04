@@ -13,7 +13,8 @@ import {
 } from 'lucide-react';
 
 // Use the uploaded logo (Ensure this file exists in your assets folder)
-import logo from './Logo.jpg';
+// Temporary fix: Uncomment import once Logo.jpg is restored
+const logo = null; // Remove this line after adding Logo.jpg file
 
 export default function Layout({
   children,
@@ -22,7 +23,8 @@ export default function Layout({
   activeRole,
   setActiveRole,
   onSignOut,
-  onLoginClick
+  onLoginClick,
+  onProfileClick
 }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
 
@@ -30,27 +32,41 @@ export default function Layout({
   // We only show the "Logged In" UI if the user exists AND is NOT anonymous.
   const isRealUser = user && !user.isAnonymous;
 
+  // Display names for navigation items
+  const roleDisplayNames = {
+    [ROLES.STAFF]: 'Submit New Ticket',
+    [ROLES.MAINTENANCE]: 'View Tickets',
+    [ROLES.HR]: 'HR Dashboard',
+    [ROLES.ADMIN]: 'Admin System'
+  };
+
   // Helper to determine if a role button should be shown
   const canViewRole = (targetRole) => {
     if (!userData) return false; // Data not loaded yet
 
     // Admin (Head Management) can see everything
-    if (userData.viewAll) return true;
+    if (userData.viewAll || userData.role === 'admin') return true;
+
+    // HR can see all ticket views
+    if (userData.role === 'hr') {
+        return targetRole !== ROLES.ADMIN; // HR sees everything except Admin System
+    }
 
     // Maintenance can see Maintenance + Staff
     if (userData.role === 'maintenance') {
-        return targetRole !== ROLES.ADMIN;
+        return targetRole === ROLES.STAFF || targetRole === ROLES.MAINTENANCE;
     }
 
-    // Staff can only see Staff
+    // Staff can only see Staff (Submit New Ticket)
     return targetRole === ROLES.STAFF;
   };
 
   const RoleButton = ({ role, mobile = false }) => {
-    // Check visibility
-    if (!canViewRole(role) && role !== ROLES.STAFF) return null;
+    // Check visibility - Staff (Submit New Ticket) is always visible to logged in users
+    if (!canViewRole(role)) return null;
 
     const isActive = activeRole === role;
+    const displayName = roleDisplayNames[role] || role;
     const baseClass = mobile
         ? "p-3 rounded-lg text-sm font-medium text-left w-full"
         : "text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full";
@@ -67,7 +83,7 @@ export default function Layout({
             }}
             className={`${baseClass} ${activeClass} ${mobile && isActive ? 'border' : ''}`}
         >
-            {role}
+            {displayName}
         </button>
     );
   };
@@ -78,7 +94,13 @@ export default function Layout({
       {/* --- DESKTOP SIDEBAR --- */}
       <aside className="hidden md:flex flex-col w-72 bg-white border-r border-slate-200 h-screen sticky top-0">
         <div className="p-6 border-b border-slate-100 flex flex-col items-center">
-          <img src={logo} alt="Al Fajer School" className="h-20 w-auto mb-4 object-contain" />
+          {logo ? (
+            <img src={logo} alt="Al Fajer School" className="h-20 w-auto mb-4 object-contain" />
+          ) : (
+            <div className="h-20 w-20 bg-indigo-100 rounded-full flex items-center justify-center mb-4">
+              <span className="text-indigo-600 font-bold text-lg">AFS</span>
+            </div>
+          )}
           <h1 className="text-lg font-bold text-slate-800 text-center leading-tight">
             Support &<br/><span className="text-indigo-600">Maintenance</span>
           </h1>
@@ -89,14 +111,62 @@ export default function Layout({
             <>
               <div className="mb-6">
                 <p className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Switch Role
+                  Ticket System
                 </p>
                 <div className="flex flex-col gap-1">
                     <RoleButton role={ROLES.STAFF} />
                     <RoleButton role={ROLES.MAINTENANCE} />
+                    {/* Only show HR role if user is actually HR */}
+                    {userData?.role === 'hr' && <RoleButton role={ROLES.HR} />}
                     <RoleButton role={ROLES.ADMIN} />
                 </div>
               </div>
+
+              {/* HR System for Management Roles */}
+              {isRealUser && (userData?.role === 'admin' || userData?.role === 'hr' || userData?.role === 'maintenance') && (
+                <div className="mb-4">
+                  <p className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                    HR System
+                  </p>
+                  <button
+                    onClick={() => {
+                      setActiveRole('user_info'); // Use 'user_info' role for HR System
+                    }}
+                    className={`text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full ${
+                      activeRole === 'user_info'
+                        ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <Users size={16} className="inline mr-2" />
+                    Staff Directory
+                  </button>
+                </div>
+              )}
+
+              {/* Profile Button for Non-Admin Users */}
+              {isRealUser && userData?.role !== 'admin' && (
+                <div className="mb-4">
+                  <p className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                    My Account
+                  </p>
+                  <button
+                    onClick={() => {
+                      setActiveRole('profile'); // Use 'profile' as the active role
+                      onProfileClick && onProfileClick();
+                    }}
+                    className={`text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full ${
+                      activeRole === 'profile'
+                        ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <Users size={16} className="inline mr-2" />
+                    My Profile
+                  </button>
+                </div>
+              )}
+
               <div className="h-px bg-slate-200 my-4 mx-3" />
             </>
           ) : (
@@ -120,10 +190,10 @@ export default function Layout({
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-slate-900 truncate">
-                  {userData?.email?.split('@')[0]}
+                  {userData?.displayName || userData?.email?.split('@')[0]}
                 </p>
-                <p className="text-xs text-slate-500 truncate">
-                  {activeRole}
+                <p className="text-xs text-slate-500 truncate capitalize">
+                  {userData?.role || 'staff'}
                 </p>
               </div>
             </div>
@@ -141,7 +211,13 @@ export default function Layout({
       <header className="md:hidden bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-3">
-            <img src={logo} alt="Logo" className="h-10 w-auto" />
+            {logo ? (
+              <img src={logo} alt="Logo" className="h-10 w-auto" />
+            ) : (
+              <span className="h-8 w-8 bg-indigo-100 rounded flex items-center justify-center">
+                <span className="text-indigo-600 font-bold text-sm">AFS</span>
+              </span>
+            )}
             <span className="font-bold text-slate-800">AFS Ops</span>
           </div>
           <button
@@ -158,7 +234,7 @@ export default function Layout({
              {isRealUser ? (
                <>
                  <div>
-                   <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Switch Role</p>
+                   <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Ticket System</p>
                    <div className="grid grid-cols-1 gap-2">
                         <RoleButton role={ROLES.STAFF} mobile={true} />
                         <RoleButton role={ROLES.MAINTENANCE} mobile={true} />
