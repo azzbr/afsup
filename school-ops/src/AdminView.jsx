@@ -4,7 +4,8 @@ import { db } from './firebase';
 import {
   ShieldAlert, AlertTriangle, CheckCircle, Clock, Plus, ChevronDown,
   MapPin, User, FileText, Camera, X, Trash2, Pause, Play, RefreshCw,
-  Calendar, Search, Loader2, FolderOpen
+  Calendar, Search, Loader2, FolderOpen, UploadCloud, Download, Filter,
+  MessageSquare, Timer
 } from 'lucide-react';
 
 // --- Sub-components (Badges) ---
@@ -421,8 +422,28 @@ export default function AdminView({
     }
   };
 
-  const escalateTicket = async (id) => {
-    await updateDoc(doc(db, 'maintenance_tickets', id), { priority: 'critical', escalated: true });
+  // Toggle escalate - if critical, revert to original. If not, escalate to critical
+  const escalateTicket = async (ticketId, currentPriority, originalPriority) => {
+    try {
+      if (currentPriority === 'critical') {
+        // De-escalate: Revert to original priority
+        const revertTo = originalPriority || 'medium';
+        await updateDoc(doc(db, 'maintenance_tickets', ticketId), { 
+          priority: revertTo, 
+          escalated: false 
+        });
+      } else {
+        // Escalate: Save original and set to critical
+        await updateDoc(doc(db, 'maintenance_tickets', ticketId), { 
+          priority: 'critical', 
+          originalPriority: currentPriority, // Save original for reverting
+          escalated: true 
+        });
+      }
+    } catch (e) {
+      console.error("Escalation error:", e);
+      alert("Failed to update priority");
+    }
   };
 
   return (
@@ -505,7 +526,15 @@ export default function AdminView({
                     <td className="px-6 py-4 text-center">
                       <div className="flex justify-center gap-2">
                         {t.status !== 'resolved' && (
-                          <button onClick={(e) => { e.stopPropagation(); escalateTicket(t.id); }} className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100" title="Escalate Priority">
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); escalateTicket(t.id, t.priority, t.originalPriority); }} 
+                            className={`p-2 rounded-lg transition-colors ${
+                              t.priority === 'critical' 
+                                ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' 
+                                : 'bg-red-50 text-red-600 hover:bg-red-100'
+                            }`} 
+                            title={t.priority === 'critical' ? 'Remove Critical (De-escalate)' : 'Escalate to Critical'}
+                          >
                             <AlertTriangle size={16} />
                           </button>
                         )}
