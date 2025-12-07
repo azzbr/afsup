@@ -14,7 +14,17 @@ export const ISSUE_CATEGORIES = [
   "Damaged electrical sockets",
   "Broken or loose door handles",
   "Safety Hazard (General)",
-  "Other"
+  "Staircases anti slip/yellow tape",
+  "Water coolers",
+  "Clock",
+  "Benches",
+  "Canopy",
+  "Artificial green grass",
+  "Tree branches",
+  "AC hose",
+  "Rubber/soft mat",
+  "Iron Fences",
+  "Others"
 ];
 
 export const LOCATIONS = [
@@ -24,7 +34,9 @@ export const LOCATIONS = [
   "B5 G3C", "B5 Hall Ground", "B5 Hall Up", "B5 Teachers Room", "B5 UnMark Room", "B1 Admin Hall Ground",
   "B1 Admin Hall Up", "Principal Office", "Academics Office", "HR Office", "HOA Office", "Accounting Office",
   "Consulor Office", "Registration Office", "Registration Waiting Area", "PE Hall", "Teachers Cabin Eng",
-  "Teachers Cabin Arb"
+  "Teachers Cabin Arb",
+  "Book storeroom", "Security room", "Building #6 first floor", "Building #6 ground floor", "P. E. Hall underground",
+  "Multi-Purpose Building", "Science Lab", "Canteen"
 ];
 
 export const ROLES = {

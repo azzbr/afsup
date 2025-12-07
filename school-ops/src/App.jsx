@@ -1,6 +1,6 @@
-// CHANGE: Import 'query' and 'where' to filter tickets for staff
+// ADDED setDoc for auto-recovery
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, deleteDoc, doc, addDoc, serverTimestamp, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, deleteDoc, doc, addDoc, setDoc, serverTimestamp, query, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { initializeAuth, signInAsAnonymous, onAuthStateChange, getUserData, signOutUser } from './auth';
 import { ROLES } from './constants'; // Importing from new constants file
@@ -25,7 +25,7 @@ export default function App() {
   const [scheduledTasks, setScheduledTasks] = useState([]);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showScheduleForm, setShowScheduleForm] = useState(false);
-  const [authLoading, setAuthLoading] = useState(true); // Fixes the flickering/wrong role issue
+  const [authLoading, setAuthLoading] = useState(true);
 
   const isAuthenticated = user && !user.isAnonymous;
 
@@ -35,84 +35,102 @@ export default function App() {
 
     const unsubscribe = onAuthStateChange(async (u) => {
       if (!u) {
-        // User is logged out - allow guest access to staff view
         setUser(null);
         setUserData(null);
-        setActiveRole(ROLES.STAFF); // Default to staff view for guest access
+        setActiveRole(ROLES.STAFF);
         setAuthLoading(false);
         return;
       }
 
       setUser(u);
 
-      // If it's a real user (Admin/Staff), fetch their profile
       if (!u.isAnonymous) {
         try {
+          // Try to get existing profile
           const result = await getUserData(u.uid);
+          
+          let currentUserData = null;
+
           if (result.success) {
-            const data = result.data;
+            currentUserData = result.data;
+          } else {
+            // --- SELF-HEALING LOGIC ---
+            // User exists in Auth but not in Database. 
+            // Automatically create a "Pending" profile so they show in Admin List.
+            console.warn("Missing profile detected. Auto-recovering user:", u.email);
+            
+            const skeletonData = {
+              uid: u.uid,
+              email: u.email,
+              displayName: u.displayName || u.email.split('@')[0], // Fallback name
+              role: 'staff',
+              status: 'pending', // FORCE PENDING
+              createdAt: serverTimestamp(),
+              isActive: true,
+              // Add basic HR fields to prevent crashes
+              firstName: 'Unknown',
+              lastName: 'User',
+              nationality: 'Bahraini',
+              iban: 'BH'
+            };
 
-            // --- SECURITY PATCH: BLOCK PENDING USERS ---
-            // If user is pending or blocked (and not the super admin), kick them out.
-            if (data.status !== 'approved' && data.role !== 'admin') {
-               alert("Access Denied: Your account is pending approval by an administrator.");
-               await signOutUser(); // Log them out immediately
-               setUser(null);
-               setUserData(null);
-               setActiveRole(ROLES.STAFF);
-               setAuthLoading(false);
-               return; // Stop execution
-            }
-            // -------------------------------------------
-
-            setUserData(data);
-
-            // AUTO-SWITCH ROLE based on permission
-            if (data.viewAll || data.role === 'admin') {
-               setActiveRole(ROLES.ADMIN);
-            } else if (data.role === 'maintenance') {
-               setActiveRole(ROLES.MAINTENANCE);
-            } else {
-               setActiveRole(ROLES.STAFF);
-            }
+            await setDoc(doc(db, 'users', u.uid), skeletonData);
+            currentUserData = skeletonData; // Use this new data immediately
           }
+
+          // --- SECURITY CHECK ---
+          // Now that we have data (either found or auto-created), check status
+          if (currentUserData.status !== 'approved' && currentUserData.role !== 'admin') {
+             alert("Registration Successful! Your account is now pending approval by an administrator.");
+             await signOutUser();
+             setUser(null);
+             setUserData(null);
+             setActiveRole(ROLES.STAFF);
+             setAuthLoading(false);
+             return; 
+          }
+          
+          setUserData(currentUserData);
+
+          // AUTO-SWITCH ROLE
+          if (currentUserData.viewAll || currentUserData.role === 'admin') {
+             setActiveRole(ROLES.ADMIN);
+          } else if (currentUserData.role === 'maintenance') {
+             setActiveRole(ROLES.MAINTENANCE);
+          } else if (currentUserData.role === 'hr') { // Added HR role switch
+             setActiveRole(ROLES.HR);
+          } else {
+             setActiveRole(ROLES.STAFF);
+          }
+
         } catch (err) {
-          console.error("Error fetching user data", err);
+          console.error("Error processing user:", err);
+          await signOutUser();
         }
       } else {
-        // Anonymous user = Guest/Staff view
+        // Anonymous user
         setUserData(null);
         setActiveRole(ROLES.STAFF);
       }
 
-      // Stop loading once we have made decisions
       setAuthLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
 
-  // --- 2. Ticket Fetching (SECURE VERSION) ---
+  // --- 2. Ticket Fetching ---
   useEffect(() => {
-    // We only fetch tickets if we know the user's role (authLoading is false)
     if (authLoading) return;
 
     let q;
     const collectionRef = collection(db, 'maintenance_tickets');
 
-    // SECURITY LOGIC:
-    // 1. Admins & Maintenance can see EVERYTHING.
-    // 2. Staff/Guests can ONLY see tickets THEY created.
-    // 3. If we try to query ALL tickets as a Staff, the Rules will block it (Crash).
-
     if (userData && (userData.role === 'admin' || userData.role === 'maintenance')) {
-        // Fetch all tickets
         q = collectionRef;
     } else if (user) {
-        // Fetch only MY tickets (satisfies rule: resource.data.reportedBy == request.auth.uid)
         q = query(collectionRef, where('reportedBy', '==', user.uid));
     } else {
-        // No user? No tickets.
         setTickets([]);
         return;
     }
@@ -124,7 +142,6 @@ export default function App() {
         createdAt: d.data().createdAt?.toDate() || new Date()
       }));
 
-      // Sort: Open first, then new to old
       data.sort((a, b) => {
         if (a.status === 'resolved' && b.status !== 'resolved') return 1;
         if (a.status !== 'resolved' && b.status === 'resolved') return -1;
@@ -132,19 +149,15 @@ export default function App() {
       });
       setTickets(data);
     }, (error) => {
-        // Handle permission errors gracefully
-        console.error("Ticket fetch error (likely permissions):", error);
-        if (error.code === 'permission-denied') {
-            setTickets([]); // Clear tickets rather than crashing
-        }
+        console.error("Ticket fetch error:", error);
+        if (error.code === 'permission-denied') setTickets([]);
     });
 
     return () => unsub();
-  }, [user, userData, authLoading]); // Re-run when user or role changes
+  }, [user, userData, authLoading]);
 
   // --- 3. Handlers ---
   const handleCreateSchedule = async (data) => {
-    // Your existing schedule logic here...
     try {
         const enhancedData = {
             ...data,
@@ -168,7 +181,6 @@ export default function App() {
     if(confirm("Delete this ticket?")) await deleteDoc(doc(db, 'maintenance_tickets', id));
   };
 
-  // --- 4. Loading State (Prevents UI glitches) ---
   if (authLoading) {
     return (
       <div className="h-screen w-full flex items-center justify-center bg-slate-50">
@@ -180,8 +192,6 @@ export default function App() {
     );
   }
 
-  // --- 5. Main Render ---
-  // --- Profile Navigation Handler ---
   const handleProfileClick = () => {
     setActiveRole('profile');
   };
@@ -196,7 +206,6 @@ export default function App() {
       onLoginClick={() => setShowLoginModal(true)}
       onProfileClick={handleProfileClick}
     >
-      {/* Header Section - Hidden for Staff/Submit view */}
       {activeRole !== ROLES.STAFF && (
         <div className="mb-8">
           <h1 className="text-2xl md:text-3xl font-bold text-slate-900">
@@ -208,31 +217,26 @@ export default function App() {
              'Support Portal'}
           </h1>
           <p className="text-slate-500 mt-1">
-            {activeRole === 'profile' ? 'View and update your personal information, documents, and requests.' :
+            {activeRole === 'profile' ? 'View and update your personal information.' :
              activeRole === 'user_info' ? 'Staff directory and contact information.' :
              'Manage school operations and maintenance tasks.'}
           </p>
         </div>
       )}
 
-      {/* --- NEW CONTENT SWITCHER - RBAC ROUTING --- */}
-
       {/* 1. STAFF VIEW */}
       {activeRole === ROLES.STAFF && (
-        <>
-          {/* Main Content: Report Form */}
-          <div className="max-w-2xl mx-auto">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-                <h2 className="text-lg font-semibold text-slate-900">Submit New Request</h2>
-                <p className="text-sm text-slate-500">Please provide details about the issue.</p>
-              </div>
-              <div className="p-6">
-                <ReportForm user={user} onSuccess={() => alert('Report Submitted!')} />
-              </div>
+        <div className="max-w-2xl mx-auto">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+              <h2 className="text-lg font-semibold text-slate-900">Submit New Request</h2>
+              <p className="text-sm text-slate-500">Please provide details about the issue.</p>
+            </div>
+            <div className="p-6">
+              <ReportForm user={user} onSuccess={() => alert('Report Submitted!')} />
             </div>
           </div>
-        </>
+        </div>
       )}
 
       {/* 2. MAINTENANCE VIEW */}
@@ -240,7 +244,7 @@ export default function App() {
         <MaintenanceView tickets={tickets} user={user} userData={userData} />
       )}
 
-      {/* 3. ADMIN VIEW (Full Management Dashboard) */}
+      {/* 3. ADMIN VIEW */}
       {isAuthenticated && activeRole === ROLES.ADMIN && (
         <AdminView
           tickets={tickets}
@@ -251,20 +255,16 @@ export default function App() {
         />
       )}
 
-      {/* 4. USER INFORMATION / HR SYSTEM VIEW */}
+      {/* 4. USER INFO / HR SYSTEM */}
       {isAuthenticated && (activeRole === 'user_info' || activeRole === ROLES.HR) && (
-        <HRSystem
-          user={user}
-          userData={userData}
-        />
+        <HRSystem user={user} userData={userData} />
       )}
 
-      {/* 5. PROFILE VIEW (Authenticated users only) */}
+      {/* 5. PROFILE VIEW */}
       {isAuthenticated && activeRole === 'profile' && (
         <UserProfile userData={userData} user={user} />
       )}
 
-      {/* --- MODALS --- */}
       {showLoginModal && (
         <LoginModal isOpen={showLoginModal} onClose={() => setShowLoginModal(false)} />
       )}

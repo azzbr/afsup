@@ -63,11 +63,8 @@ function LoginModal({ isOpen, onClose }) {
 
       if (result.success) {
         setError('');
-        alert('Registration successful! Your account is pending approval by an Admin.');
-        setActiveTab('login');
-        setEmail('');
-        setPassword('');
-        setConfirmPassword('');
+        // Close modal to let App.jsx handle auto-login and verification
+        onClose();
       } else {
         setError(result.error);
       }
