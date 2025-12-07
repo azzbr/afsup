@@ -163,6 +163,11 @@ export default function AdminView({
 
   // New state for loading feedback
   const [actionLoading, setActionLoading] = useState(null); // Stores the ID of the user being updated
+  
+  // NEW: Filter & Enhancement States
+  const [ticketFilter, setTicketFilter] = useState('all'); // 'all', 'critical', 'open', 'in_progress', 'resolved'
+  const [selectedTickets, setSelectedTickets] = useState([]); // For batch actions
+  const [quickNote, setQuickNote] = useState({}); // { ticketId: 'note text' }
 
   useEffect(() => { fetchData(); }, [user, userData]);
 
@@ -317,6 +322,130 @@ export default function AdminView({
     return a;
   }, { critical: 0, backlog: 0, inProgress: 0, resolved: 0 });
 
+  // --- FILTERED TICKETS based on stat card selection ---
+  const filteredTickets = tickets.filter(t => {
+    if (ticketFilter === 'all') return true;
+    if (ticketFilter === 'critical') return t.priority === 'critical' && t.status !== 'resolved';
+    if (ticketFilter === 'open') return t.status === 'open';
+    if (ticketFilter === 'in_progress') return t.status === 'in_progress';
+    if (ticketFilter === 'resolved') return t.status === 'resolved';
+    return true;
+  });
+
+  // --- TIME TRACKING / SLA Helper ---
+  const getTimeOpen = (createdAt) => {
+    if (!createdAt) return { text: 'N/A', color: 'text-slate-400', urgent: false };
+    const created = createdAt instanceof Date ? createdAt : (createdAt.toDate ? createdAt.toDate() : new Date(createdAt));
+    const now = new Date();
+    const diffMs = now - created;
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffHours / 24);
+    
+    let text, color, urgent = false;
+    if (diffDays > 0) {
+      text = `${diffDays}d ${diffHours % 24}h`;
+    } else {
+      text = `${diffHours}h`;
+    }
+    
+    // SLA color coding: <24h = green, 24-48h = yellow, >48h = red
+    if (diffHours < 24) { color = 'text-emerald-600 bg-emerald-50'; }
+    else if (diffHours < 48) { color = 'text-amber-600 bg-amber-50'; }
+    else { color = 'text-red-600 bg-red-50'; urgent = true; }
+    
+    return { text, color, urgent };
+  };
+
+  // --- EXPORT TO CSV ---
+  const exportToCSV = () => {
+    const dataToExport = ticketFilter === 'all' ? tickets : filteredTickets;
+    const headers = ['Category', 'Location', 'Priority', 'Status', 'Reported', 'Description', 'Admin Notes'];
+    const rows = dataToExport.map(t => [
+      t.category || '',
+      t.location || '',
+      t.priority || 'medium',
+      t.status || 'open',
+      t.createdAt ? new Date(t.createdAt).toLocaleDateString() : '',
+      (t.description || '').replace(/"/g, '""'),
+      (t.adminNotes || '').replace(/"/g, '""')
+    ]);
+    
+    const csvContent = [headers.join(','), ...rows.map(r => r.map(cell => `"${cell}"`).join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `tickets_export_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+  };
+
+  // --- QUICK NOTE SAVE ---
+  const saveQuickNote = async (ticketId, note) => {
+    try {
+      await updateDoc(doc(db, 'maintenance_tickets', ticketId), { 
+        adminNotes: note,
+        lastNoteBy: userData?.email || user?.uid,
+        lastNoteAt: serverTimestamp()
+      });
+      setQuickNote(prev => ({ ...prev, [ticketId]: '' }));
+    } catch (e) {
+      console.error("Note save error:", e);
+      alert("Failed to save note");
+    }
+  };
+
+  // --- BATCH ACTIONS ---
+  const handleSelectAll = (checked) => {
+    if (checked) {
+      setSelectedTickets(filteredTickets.filter(t => t.status !== 'resolved').map(t => t.id));
+    } else {
+      setSelectedTickets([]);
+    }
+  };
+
+  const handleSelectTicket = (ticketId, checked) => {
+    if (checked) {
+      setSelectedTickets(prev => [...prev, ticketId]);
+    } else {
+      setSelectedTickets(prev => prev.filter(id => id !== ticketId));
+    }
+  };
+
+  const batchMarkResolved = async () => {
+    if (selectedTickets.length === 0) return alert("No tickets selected");
+    if (!confirm(`Mark ${selectedTickets.length} tickets as resolved?`)) return;
+    
+    try {
+      for (const id of selectedTickets) {
+        await updateDoc(doc(db, 'maintenance_tickets', id), { 
+          status: 'resolved',
+          resolvedAt: serverTimestamp(),
+          resolvedBy: userData?.email || 'Admin'
+        });
+      }
+      setSelectedTickets([]);
+      alert(`${selectedTickets.length} tickets marked as resolved`);
+    } catch (e) {
+      console.error(e);
+      alert("Error updating tickets");
+    }
+  };
+
+  const batchDelete = async () => {
+    if (selectedTickets.length === 0) return alert("No tickets selected");
+    if (!confirm(`DELETE ${selectedTickets.length} tickets permanently?`)) return;
+    
+    try {
+      for (const id of selectedTickets) {
+        await deleteDoc(doc(db, 'maintenance_tickets', id));
+      }
+      setSelectedTickets([]);
+      alert(`${selectedTickets.length} tickets deleted`);
+    } catch (e) {
+      console.error(e);
+      alert("Error deleting tickets");
+    }
+  };
+
   // --- ROBUST UPDATE FUNCTION (Fixes the issue) ---
   const updateUser = async (userId, newStatus) => {
     // 1. Set loading state for feedback
@@ -449,18 +578,23 @@ export default function AdminView({
   return (
     <div className="space-y-6">
 
-      {/* --- Admin Stats Cards --- */}
+      {/* --- Admin Stats Cards (Clickable Filters) --- */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: 'Critical Issues', value: ticketStats.critical, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100' },
-          { label: 'Open Backlog', value: ticketStats.backlog, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100' },
-          { label: 'In Progress', value: ticketStats.inProgress, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
-          { label: 'Resolved', value: ticketStats.resolved, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' }
+          { label: 'Critical Issues', value: ticketStats.critical, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100', filter: 'critical' },
+          { label: 'Open Backlog', value: ticketStats.backlog, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100', filter: 'open' },
+          { label: 'In Progress', value: ticketStats.inProgress, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100', filter: 'in_progress' },
+          { label: 'Resolved', value: ticketStats.resolved, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100', filter: 'resolved' }
         ].map((stat, i) => (
-          <div key={i} className={`p-4 rounded-2xl border ${stat.bg} ${stat.border}`}>
+          <button 
+            key={i} 
+            onClick={() => setTicketFilter(ticketFilter === stat.filter ? 'all' : stat.filter)}
+            className={`p-4 rounded-2xl border text-left transition-all ${stat.bg} ${stat.border} ${ticketFilter === stat.filter ? 'ring-2 ring-offset-2 ring-indigo-500 scale-105' : 'hover:scale-102'}`}
+          >
             <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{stat.label}</p>
-          </div>
+            {ticketFilter === stat.filter && <p className="text-[10px] text-indigo-600 mt-1">✓ Filtered</p>}
+          </button>
         ))}
       </div>
 
@@ -493,60 +627,167 @@ export default function AdminView({
 
       {/* --- CONTENT: OVERVIEW --- */}
       {activeTab === 'overview' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="table-container">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 border-b border-slate-100">
-                <tr>
-                  <th className="px-6 py-4 font-semibold text-slate-500">Issue Details</th>
-                  <th className="px-6 py-4 font-semibold text-slate-500 text-center">Status</th>
-                  <th className="px-6 py-4 font-semibold text-slate-500 text-center">Reported</th>
-                  <th className="px-6 py-4 font-semibold text-slate-500 text-center">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {tickets.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4 cursor-pointer" onClick={() => { setDetailTicket(t); setShowDetailModal(true); }}>
-                      <p className="font-semibold text-slate-800 flex items-center gap-2">
-                        {t.category}
-                        {t.imageUrls?.length > 0 && <Camera size={14} className="text-slate-400" />}
-                      </p>
-                      <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
-                         <span className="flex items-center gap-1"><MapPin size={12}/> {t.location}</span>
-                         <PriorityBadge priority={t.priority} />
-                      </p>
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      <StatusBadge status={t.status} />
-                    </td>
-                    <td className="px-6 py-4 text-center text-slate-500">
-                      {new Date(t.createdAt).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      <div className="flex justify-center gap-2">
-                        {t.status !== 'resolved' && (
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); escalateTicket(t.id, t.priority, t.originalPriority); }} 
-                            className={`p-2 rounded-lg transition-colors ${
-                              t.priority === 'critical' 
-                                ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' 
-                                : 'bg-red-50 text-red-600 hover:bg-red-100'
-                            }`} 
-                            title={t.priority === 'critical' ? 'Remove Critical (De-escalate)' : 'Escalate to Critical'}
-                          >
-                            <AlertTriangle size={16} />
-                          </button>
-                        )}
-                        <button onClick={(e) => { e.stopPropagation(); onDeleteTicket(t.id); }} className="p-2 bg-slate-100 text-slate-500 rounded-lg hover:bg-slate-200" title="Delete Ticket">
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
+        <div className="space-y-4">
+          {/* Toolbar: Batch Actions + Export */}
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+            <div className="flex items-center gap-3">
+              {ticketFilter !== 'all' && (
+                <button 
+                  onClick={() => setTicketFilter('all')} 
+                  className="text-xs bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-300 flex items-center gap-1"
+                >
+                  <X size={12} /> Clear Filter
+                </button>
+              )}
+              <span className="text-sm text-slate-500">
+                Showing <strong>{filteredTickets.length}</strong> of {tickets.length} tickets
+              </span>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              {/* Batch Actions (when tickets selected) */}
+              {selectedTickets.length > 0 && (
+                <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200">
+                  <span className="text-xs text-indigo-700 font-medium">{selectedTickets.length} selected</span>
+                  <button onClick={batchMarkResolved} className="text-xs bg-emerald-600 text-white px-2 py-1 rounded hover:bg-emerald-700">
+                    ✓ Resolve All
+                  </button>
+                  <button onClick={batchDelete} className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700">
+                    Delete All
+                  </button>
+                  <button onClick={() => setSelectedTickets([])} className="text-xs text-slate-500 hover:text-slate-700">
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+              
+              {/* Export Button */}
+              <button 
+                onClick={exportToCSV} 
+                className="flex items-center gap-1.5 text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50"
+              >
+                <Download size={14} /> Export CSV
+              </button>
+            </div>
+          </div>
+
+          {/* Tickets Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="table-container">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100">
+                  <tr>
+                    <th className="px-3 py-4 w-10">
+                      <input 
+                        type="checkbox" 
+                        checked={selectedTickets.length === filteredTickets.filter(t => t.status !== 'resolved').length && selectedTickets.length > 0}
+                        onChange={(e) => handleSelectAll(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-300"
+                      />
+                    </th>
+                    <th className="px-4 py-4 font-semibold text-slate-500">Issue Details</th>
+                    <th className="px-4 py-4 font-semibold text-slate-500 text-center">Status</th>
+                    <th className="px-4 py-4 font-semibold text-slate-500 text-center">
+                      <span className="flex items-center justify-center gap-1"><Timer size={14}/> Open</span>
+                    </th>
+                    <th className="px-4 py-4 font-semibold text-slate-500">Quick Note</th>
+                    <th className="px-4 py-4 font-semibold text-slate-500 text-center">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredTickets.map((t) => {
+                    const timeOpen = t.status !== 'resolved' ? getTimeOpen(t.createdAt) : null;
+                    return (
+                      <tr key={t.id} className={`hover:bg-slate-50/50 transition-colors ${selectedTickets.includes(t.id) ? 'bg-indigo-50/30' : ''}`}>
+                        <td className="px-3 py-4">
+                          {t.status !== 'resolved' && (
+                            <input 
+                              type="checkbox" 
+                              checked={selectedTickets.includes(t.id)}
+                              onChange={(e) => handleSelectTicket(t.id, e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300"
+                            />
+                          )}
+                        </td>
+                        <td className="px-4 py-4 cursor-pointer" onClick={() => { setDetailTicket(t); setShowDetailModal(true); }}>
+                          <p className="font-semibold text-slate-800 flex items-center gap-2">
+                            {t.category}
+                            {t.imageUrls?.length > 0 && <Camera size={14} className="text-slate-400" />}
+                          </p>
+                          <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                            <span className="flex items-center gap-1"><MapPin size={12}/> {t.location}</span>
+                            <PriorityBadge priority={t.priority} />
+                          </p>
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          <StatusBadge status={t.status} />
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          {timeOpen ? (
+                            <span className={`px-2 py-1 rounded-lg text-xs font-medium ${timeOpen.color}`}>
+                              {timeOpen.urgent && '⚠️ '}{timeOpen.text}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {t.status !== 'resolved' ? (
+                            <div className="flex items-center gap-1">
+                              <input 
+                                type="text"
+                                placeholder={t.adminNotes || "Add note..."}
+                                value={quickNote[t.id] || ''}
+                                onChange={(e) => setQuickNote(prev => ({ ...prev, [t.id]: e.target.value }))}
+                                className="w-28 text-xs border border-slate-200 rounded px-2 py-1 focus:outline-none focus:border-indigo-400"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              {quickNote[t.id] && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); saveQuickNote(t.id, quickNote[t.id]); }}
+                                  className="p-1 bg-indigo-100 text-indigo-600 rounded hover:bg-indigo-200"
+                                >
+                                  <CheckCircle size={12} />
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400 italic">{t.adminNotes || '—'}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          <div className="flex justify-center gap-2">
+                            {t.status !== 'resolved' && (
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); escalateTicket(t.id, t.priority, t.originalPriority); }} 
+                                className={`p-2 rounded-lg transition-colors ${
+                                  t.priority === 'critical' 
+                                    ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' 
+                                    : 'bg-red-50 text-red-600 hover:bg-red-100'
+                                }`} 
+                                title={t.priority === 'critical' ? 'Remove Critical (De-escalate)' : 'Escalate to Critical'}
+                              >
+                                <AlertTriangle size={16} />
+                              </button>
+                            )}
+                            <button onClick={(e) => { e.stopPropagation(); onDeleteTicket(t.id); }} className="p-2 bg-slate-100 text-slate-500 rounded-lg hover:bg-slate-200" title="Delete Ticket">
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredTickets.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-8 text-slate-500">
+                        No tickets match the current filter
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
