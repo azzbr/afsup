@@ -237,16 +237,7 @@ export default function App() {
 
       {/* 2. MAINTENANCE VIEW */}
       {isAuthenticated && activeRole === ROLES.MAINTENANCE && (
-        <>
-          {/* Maintenance Ticket Board */}
-          <MaintenanceView tickets={tickets} user={user} userData={userData} />
-
-          {/* Directory View (Using AdminView but it will be read-only due to logic above) */}
-          <div className="mt-8">
-            <h3 className="text-lg font-bold mb-4">Staff Directory</h3>
-            <AdminView user={user} userData={userData} activeTab="users" />
-          </div>
-        </>
+        <MaintenanceView tickets={tickets} user={user} userData={userData} />
       )}
 
       {/* 3. ADMIN VIEW (Full Management Dashboard) */}

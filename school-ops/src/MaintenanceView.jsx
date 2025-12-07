@@ -1,40 +1,65 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { updateDoc, doc, serverTimestamp, collection, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import {
-  Wrench, X, Image as ImageIcon, CheckCircle, MapPin,
-  Clock, User, FileText, Camera, Calendar, RefreshCw, AlertTriangle
+  Wrench, X, CheckCircle, MapPin, Clock, User, Camera, Calendar, RefreshCw, 
+  AlertTriangle, Search, Filter, SortAsc, SortDesc, ChevronDown, ChevronUp,
+  Play, Zap, History, AlertCircle, Loader2
 } from 'lucide-react';
 import { compressImage, uploadImage } from './storage';
 
-// --- Badges ---
+// ============================================================================
+// STATUS BADGE (HR-Style with Icons)
+// ============================================================================
 const StatusBadge = ({ status }) => {
-  const styles = {
-    open: "bg-red-50 text-red-700 border-red-100",
-    in_progress: "bg-amber-50 text-amber-700 border-amber-100",
-    resolved: "bg-emerald-50 text-emerald-700 border-emerald-100"
+  const config = {
+    open: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', icon: AlertCircle, label: 'Open' },
+    in_progress: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', icon: Clock, label: 'In Progress' },
+    resolved: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', icon: CheckCircle, label: 'Resolved' }
   };
-  const labels = { open: 'Open', in_progress: 'In Progress', resolved: 'Resolved' };
+  const style = config[status] || config.open;
+  const Icon = style.icon;
+  
   return (
-    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${styles[status] || styles.open}`}>
-      {labels[status] || status}
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${style.bg} ${style.text} ${style.border}`}>
+      <Icon size={12} />
+      {style.label}
     </span>
   );
 };
 
+// ============================================================================
+// PRIORITY BADGE (HR-Style)
+// ============================================================================
 const PriorityBadge = ({ priority }) => {
-  const styles = {
-    low: "bg-slate-100 text-slate-600",
-    medium: "bg-blue-50 text-blue-700",
-    high: "bg-orange-50 text-orange-700",
-    critical: "bg-red-600 text-white animate-pulse"
+  const config = {
+    low: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-200' },
+    medium: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
+    high: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200' },
+    critical: { bg: 'bg-red-600', text: 'text-white', border: 'border-red-700', pulse: true }
   };
+  const style = config[priority] || config.medium;
+  
   return (
-    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${styles[priority] || styles.medium}`}>
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border ${style.bg} ${style.text} ${style.border} ${style.pulse ? 'animate-pulse' : ''}`}>
+      {priority === 'critical' && <AlertTriangle size={10} />}
       {priority}
     </span>
   );
 };
+
+// ============================================================================
+// QUICK STATS CARD
+// ============================================================================
+const StatCard = ({ icon: Icon, label, count, colorClass, borderColor }) => (
+  <div className={`${colorClass} rounded-xl p-4 border ${borderColor} transition-transform hover:scale-105`}>
+    <div className="flex items-center justify-between">
+      <Icon size={20} className="opacity-70" />
+      <span className="text-2xl font-bold">{count}</span>
+    </div>
+    <p className="text-xs font-medium mt-1 opacity-80">{label}</p>
+  </div>
+);
 
 // --- Modals ---
 
@@ -224,16 +249,75 @@ function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
   );
 }
 
-// --- Main Component ---
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
 
 export default function MaintenanceView({ tickets = [], user, userData }) {
+  // Modal States
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [detailTicket, setDetailTicket] = useState(null);
   const [scheduledTasks, setScheduledTasks] = useState([]);
+  
+  // Search, Filter, Sort States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('newest');
+  const [showResolvedHistory, setShowResolvedHistory] = useState(false);
 
-  const activeTickets = tickets.filter(t => t.status !== 'resolved');
+  // Calculate Stats
+  const stats = useMemo(() => {
+    const open = tickets.filter(t => t.status === 'open').length;
+    const inProgress = tickets.filter(t => t.status === 'in_progress').length;
+    const resolved = tickets.filter(t => t.status === 'resolved').length;
+    const critical = tickets.filter(t => t.priority === 'critical' && t.status !== 'resolved').length;
+    return { open, inProgress, resolved, critical };
+  }, [tickets]);
+
+  // Filter and Sort Tickets
+  const filteredTickets = useMemo(() => {
+    let result = tickets.filter(t => t.status !== 'resolved');
+    
+    // Apply search
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(t => 
+        t.category?.toLowerCase().includes(query) ||
+        t.location?.toLowerCase().includes(query) ||
+        t.description?.toLowerCase().includes(query)
+      );
+    }
+    
+    // Apply priority filter
+    if (priorityFilter !== 'all') {
+      result = result.filter(t => t.priority === priorityFilter);
+    }
+    
+    // Apply sorting
+    result.sort((a, b) => {
+      if (sortBy === 'newest') {
+        return (b.createdAt?.toDate?.() || new Date()) - (a.createdAt?.toDate?.() || new Date());
+      } else if (sortBy === 'oldest') {
+        return (a.createdAt?.toDate?.() || new Date()) - (b.createdAt?.toDate?.() || new Date());
+      } else if (sortBy === 'priority') {
+        const order = { critical: 0, high: 1, medium: 2, low: 3 };
+        return (order[a.priority] || 4) - (order[b.priority] || 4);
+      }
+      return 0;
+    });
+    
+    return result;
+  }, [tickets, searchQuery, priorityFilter, sortBy]);
+
+  // Resolved tickets for history
+  const resolvedTickets = useMemo(() => {
+    return tickets
+      .filter(t => t.status === 'resolved')
+      .sort((a, b) => (b.resolvedAt?.toDate?.() || new Date()) - (a.resolvedAt?.toDate?.() || new Date()))
+      .slice(0, 10);
+  }, [tickets]);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'scheduled_tasks'), (snap) => {
@@ -301,61 +385,177 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
   return (
     <div className="space-y-6">
 
-      {/* Queue Card */}
+      {/* Quick Stats Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard 
+          icon={AlertCircle} 
+          label="Open" 
+          count={stats.open} 
+          colorClass="bg-red-50 text-red-700" 
+          borderColor="border-red-200" 
+        />
+        <StatCard 
+          icon={Clock} 
+          label="In Progress" 
+          count={stats.inProgress} 
+          colorClass="bg-amber-50 text-amber-700" 
+          borderColor="border-amber-200" 
+        />
+        <StatCard 
+          icon={CheckCircle} 
+          label="Resolved" 
+          count={stats.resolved} 
+          colorClass="bg-emerald-50 text-emerald-700" 
+          borderColor="border-emerald-200" 
+        />
+        <StatCard 
+          icon={AlertTriangle} 
+          label="Critical" 
+          count={stats.critical} 
+          colorClass="bg-red-600 text-white" 
+          borderColor="border-red-700" 
+        />
+      </div>
+
+      {/* Search & Filter Bar */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4">
+        <div className="flex flex-col md:flex-row gap-4">
+          {/* Search Input */}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search by category, location, or description..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:bg-white outline-none transition-all"
+            />
+          </div>
+          
+          {/* Priority Filter */}
+          <select
+            value={priorityFilter}
+            onChange={(e) => setPriorityFilter(e.target.value)}
+            className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+          >
+            <option value="all">All Priorities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          
+          {/* Sort Options */}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+          >
+            <option value="newest">Newest First</option>
+            <option value="oldest">Oldest First</option>
+            <option value="priority">By Priority</option>
+          </select>
+        </div>
+        
+        {/* Results Count */}
+        <div className="mt-3 pt-3 border-t border-slate-100">
+          <p className="text-sm text-slate-500">
+            Showing <span className="font-bold text-slate-700">{filteredTickets.length}</span> active tickets
+            {(searchQuery || priorityFilter !== 'all') && (
+              <button 
+                onClick={() => { setSearchQuery(''); setPriorityFilter('all'); }}
+                className="ml-2 text-indigo-600 hover:text-indigo-700 font-medium"
+              >
+                Clear filters
+              </button>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {/* Active Tickets Queue */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-5 border-b border-slate-100 flex items-center gap-2 bg-slate-50/50">
-          <Wrench className="w-5 h-5 text-indigo-600" />
-          <h2 className="font-bold text-slate-800">Maintenance Queue</h2>
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div className="flex items-center gap-2">
+            <Wrench className="w-5 h-5 text-indigo-600" />
+            <h2 className="font-bold text-slate-800">Active Tickets</h2>
+          </div>
+          <span className="text-sm text-slate-500">{filteredTickets.length} tasks</span>
         </div>
 
-        {activeTickets.length === 0 ? (
+        {filteredTickets.length === 0 ? (
           <div className="text-center py-12">
             <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
             <p className="text-slate-800 font-medium">All Caught Up!</p>
-            <p className="text-slate-500 text-sm">No pending tasks.</p>
+            <p className="text-slate-500 text-sm">No pending tasks match your filters.</p>
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {activeTickets.map(ticket => (
-              <div key={ticket.id} className="p-4 hover:bg-slate-50 transition-colors flex flex-col md:flex-row gap-4 items-start md:items-center">
-                <div className="flex-1 cursor-pointer" onClick={() => { setDetailTicket(ticket); setShowDetailModal(true); }}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-semibold text-slate-800">{ticket.category}</span>
-                    {ticket.imageUrls?.length > 0 && <Camera size={14} className="text-slate-400" />}
+            {filteredTickets.map(ticket => (
+              <div 
+                key={ticket.id} 
+                className="p-4 hover:bg-slate-50 transition-all duration-200 group cursor-pointer border-l-4 border-transparent hover:border-indigo-500"
+              >
+                <div className="flex flex-col md:flex-row gap-4 items-start md:items-center">
+                  <div className="flex-1" onClick={() => { setDetailTicket(ticket); setShowDetailModal(true); }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-semibold text-slate-800 group-hover:text-indigo-700 transition-colors">
+                        {ticket.category}
+                      </span>
+                      {ticket.imageUrls?.length > 0 && (
+                        <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-500 flex items-center gap-1">
+                          <Camera size={10} /> {ticket.imageUrls.length}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                      <span className="flex items-center gap-1">
+                        <MapPin size={12} className="text-slate-400" /> {ticket.location}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Clock size={12} className="text-slate-400" /> {getTimeElapsed(ticket.createdAt)}
+                      </span>
+                      <PriorityBadge priority={ticket.priority} />
+                    </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span className="flex items-center gap-1"><MapPin size={12}/> {ticket.location}</span>
-                    <PriorityBadge priority={ticket.priority} />
+
+                  <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+                    <div className="flex flex-col items-end gap-1">
+                      <StatusBadge status={ticket.status} />
+                      {ticket.status === 'in_progress' && ticket.startedByName && (
+                        <span className="text-[10px] text-slate-500">
+                          by {ticket.startedByName}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      {ticket.status === 'open' && (
+                        <>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); startJob(ticket.id); }} 
+                            className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 flex items-center gap-1 transition-colors"
+                          >
+                            <Play size={12} /> Start
+                          </button>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setSelectedTicket(ticket); setShowCompletionModal(true); }} 
+                            className="px-3 py-1.5 border border-emerald-500 text-emerald-600 rounded-lg text-xs font-bold hover:bg-emerald-50 flex items-center gap-1 transition-colors"
+                          >
+                            <Zap size={12} /> Quick Fix
+                          </button>
+                        </>
+                      )}
+                      {ticket.status === 'in_progress' && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setSelectedTicket(ticket); setShowCompletionModal(true); }} 
+                          className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1 transition-colors"
+                        >
+                          <CheckCircle size={12} /> Mark Done
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-
-                <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
-                   <div className="flex flex-col items-end gap-1">
-                     <StatusBadge status={ticket.status} />
-                     {ticket.status === 'in_progress' && (
-                       <span className="text-[10px] text-amber-700 font-medium flex items-center gap-1">
-                         <Clock size={10}/> {getTimeElapsed(ticket.startedAt)}
-                       </span>
-                     )}
-                   </div>
-
-                   <div className="flex gap-2">
-                     {ticket.status === 'open' && (
-                       <>
-                         <button onClick={() => startJob(ticket.id)} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700">
-                           Start Job
-                         </button>
-                         <button onClick={() => { setSelectedTicket(ticket); setShowCompletionModal(true); }} className="px-3 py-1.5 border border-emerald-500 text-emerald-600 rounded-lg text-xs font-bold hover:bg-emerald-50">
-                           Quick Fix
-                         </button>
-                       </>
-                     )}
-                     {ticket.status === 'in_progress' && (
-                       <button onClick={() => { setSelectedTicket(ticket); setShowCompletionModal(true); }} className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1">
-                         <CheckCircle size={12}/> Mark Done
-                       </button>
-                     )}
-                   </div>
                 </div>
               </div>
             ))}
@@ -366,29 +566,91 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
       {/* Scheduled Tasks Card */}
       {scheduledTasks.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-           <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-             <Calendar className="w-5 h-5 text-indigo-600" /> Upcoming Schedules
-           </h3>
-           <div className="grid gap-3">
-             {scheduledTasks.slice(0, 3).map(task => (
-               <div key={task.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
-                 <div>
-                   <p className="font-semibold text-slate-700 text-sm">{task.category}</p>
-                   <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
-                     <RefreshCw size={10}/> Every {task.frequencyDays} days
-                     <span className="w-1 h-1 bg-slate-300 rounded-full"/>
-                     {task.locations?.length} locations
-                   </p>
-                 </div>
-                 <div className="text-right">
-                   <p className="text-xs font-bold text-indigo-600 uppercase">Next Due</p>
-                   <p className="text-sm font-medium text-slate-800">
-                     {task.nextRun?.toDate ? task.nextRun.toDate().toLocaleDateString() : 'N/A'}
-                   </p>
-                 </div>
-               </div>
-             ))}
-           </div>
+          <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+            <Calendar className="w-5 h-5 text-indigo-600" /> Upcoming Schedules
+          </h3>
+          <div className="grid gap-3">
+            {scheduledTasks.slice(0, 3).map(task => (
+              <div key={task.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center hover:bg-slate-100 transition-colors">
+                <div>
+                  <p className="font-semibold text-slate-700 text-sm">{task.category}</p>
+                  <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                    <RefreshCw size={10} /> Every {task.frequencyDays} days
+                    <span className="w-1 h-1 bg-slate-300 rounded-full" />
+                    {task.locations?.length} locations
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-bold text-indigo-600 uppercase">Next Due</p>
+                  <p className="text-sm font-medium text-slate-800">
+                    {task.nextRun?.toDate ? task.nextRun.toDate().toLocaleDateString() : 'N/A'}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Resolved History Section */}
+      {resolvedTickets.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <button 
+            onClick={() => setShowResolvedHistory(!showResolvedHistory)}
+            className="w-full p-5 flex items-center justify-between bg-slate-50/50 hover:bg-slate-100 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <History className="w-5 h-5 text-emerald-600" />
+              <h3 className="font-bold text-slate-800">Resolved History</h3>
+              <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                {resolvedTickets.length}
+              </span>
+            </div>
+            {showResolvedHistory ? <ChevronUp size={20} className="text-slate-400" /> : <ChevronDown size={20} className="text-slate-400" />}
+          </button>
+          
+          {showResolvedHistory && (
+            <div className="divide-y divide-slate-100">
+              {resolvedTickets.map(ticket => (
+                <div 
+                  key={ticket.id} 
+                  className="p-4 hover:bg-slate-50 transition-colors cursor-pointer"
+                  onClick={() => { setDetailTicket(ticket); setShowDetailModal(true); }}
+                >
+                  <div className="flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <CheckCircle size={14} className="text-emerald-500" />
+                        <span className="font-medium text-slate-700">{ticket.category}</span>
+                        <PriorityBadge priority={ticket.priority} />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <MapPin size={12} /> {ticket.location}
+                        </span>
+                        {ticket.resolvedBy && (
+                          <span className="flex items-center gap-1">
+                            <User size={12} /> Fixed by: {ticket.resolvedBy}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-slate-400">Resolved</p>
+                      <p className="text-sm font-medium text-slate-600">
+                        {ticket.resolvedAt?.toDate ? ticket.resolvedAt.toDate().toLocaleDateString() : 'N/A'}
+                      </p>
+                    </div>
+                  </div>
+                  {ticket.completionNotes && (
+                    <p className="mt-2 text-xs text-slate-500 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                      "{ticket.completionNotes}"
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
