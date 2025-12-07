@@ -1,8 +1,7 @@
 // Import Firestore for user management
-import { signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, updateProfile, deleteUser } from 'firebase/auth';
 import { auth } from './firebase';
-// CHANGE: Imported getDoc instead of query/where logic for fetching user
-import { doc, setDoc, getDoc, collection } from 'firebase/firestore';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
 
 // Anonymous authentication for public reporting
@@ -19,7 +18,6 @@ export const signInAsAnonymous = async () => {
 // Email/password authentication for staff/admin
 export const signInWithCredentials = async (email, password) => {
   try {
-    // Set persistence to browser local storage so users stay logged in across refreshes
     await setPersistence(auth, browserLocalPersistence);
     const result = await signInWithEmailAndPassword(auth, email, password);
     return { success: true, user: result.user };
@@ -43,7 +41,6 @@ export const signOutUser = async () => {
 // Initialize authentication with persistence
 export const initializeAuth = async () => {
   try {
-    // Set default persistence to browser local storage for all auth types
     await setPersistence(auth, browserLocalPersistence);
     return { success: true };
   } catch (error) {
@@ -60,11 +57,13 @@ export const onAuthStateChange = (callback) => {
 // Super admin email - this account is auto-approved with admin role
 const SUPER_ADMIN_EMAIL = 'admin@afs.edu.bh';
 
-// User registration with Firestore user record
+// --- ATOMIC USER CREATION ---
 export const createUserAccount = async (email, password, nameData) => {
+  let user = null;
   try {
-    // Create Firebase Auth user
+    // 1. Create Firebase Auth user
     const result = await createUserWithEmailAndPassword(auth, email, password);
+    user = result.user;
 
     // Check if this is the super admin account
     const isSuperAdmin = email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
@@ -72,67 +71,76 @@ export const createUserAccount = async (email, password, nameData) => {
     // Construct the full name for display
     const fullName = `${nameData.firstName} ${nameData.middleName ? nameData.middleName + ' ' : ''}${nameData.lastName}`;
 
-    // Create user record in Firestore
+    // 2. Update Auth Profile immediately
+    await updateProfile(user, {
+      displayName: fullName
+    });
+
+    // 3. Create user record in Firestore (CRITICAL: Wait for this!)
     const userDoc = {
-      uid: result.user.uid,
-      email: result.user.email,
-      role: isSuperAdmin ? 'admin' : 'staff', // Super admin gets admin role
-      status: isSuperAdmin ? 'approved' : 'pending', // Super admin is auto-approved
-      viewAll: isSuperAdmin ? true : false, // Super admin can view all dashboards
+      uid: user.uid,
+      email: user.email,
+      role: isSuperAdmin ? 'admin' : 'staff',
+      status: isSuperAdmin ? 'approved' : 'pending',
+      viewAll: isSuperAdmin ? true : false,
       createdAt: new Date(),
       isActive: true,
-
-      // --- BAHRAIN HR FIELDS (BASIC) ---
       firstName: nameData.firstName,
       middleName: nameData.middleName || '',
       lastName: nameData.lastName,
-      arabicName: '', // For GOSI & Ministry contracts
+      arabicName: '',
       displayName: fullName,
-      nationality: 'Bahraini', // Default - user can change later
-      gender: 'Male', // Default
-      maritalStatus: 'Single', // Affects visa eligibility
-
-      // --- DOCUMENTS ---
-      cprNumber: '', // 9-digit CPR
+      nationality: 'Bahraini',
+      gender: 'Male',
+      maritalStatus: 'Single',
+      cprNumber: '',
       cprExpiry: null,
       passportNumber: '',
       passportExpiry: null,
-
-      // --- VISA (Only for non-Bahrainis) ---
       residencePermitNumber: '',
       residencePermitExpiry: null,
       workPermitNumber: '',
-
-      // --- BANKING (WPS) ---
-      iban: 'BH', // Bahrain IBAN starts with BH
-      bankName: 'National Bank of Bahrain (NBB)', // Popular choice
-
-      // --- EMPLOYMENT ---
+      iban: 'BH',
+      bankName: 'National Bank of Bahrain (NBB)',
       dateOfJoining: null,
-      sickDaysUsed: 0, // Bahrain Labor Law tracking
-      annualLeaveBalance: 30, // Standard 30 days/year
-
-      // --- CONTACT ---
+      sickDaysUsed: 0,
+      annualLeaveBalance: 30,
       phoneNumber: '',
-
-      // --- OLD PLACEHOLDERS (keeping for migration) ---
-      dateOfJoining: null
     };
 
-    await setDoc(doc(db, 'users', result.user.uid), userDoc);
+    // This ensures the document exists BEFORE we return success
+    await setDoc(doc(db, 'users', user.uid), userDoc);
 
-    return { success: true, user: result.user, isSuperAdmin };
+    return { success: true, user: user, isSuperAdmin };
+
   } catch (error) {
     console.error('Account creation error:', error);
-    return { success: false, error: error.message };
+
+    // ROLLBACK: If Firestore write failed, delete the Auth user
+    // so the user isn't stuck in "Zombie" state.
+    if (user) {
+      try {
+        await deleteUser(user);
+        console.log('Rolled back orphaned auth user');
+      } catch (cleanupError) {
+        console.error('Failed to cleanup user:', cleanupError);
+      }
+    }
+
+    // User Friendly Error Message
+    let errorMsg = error.message;
+    if (error.code === 'permission-denied') {
+      errorMsg = 'System registration is currently locked. Please contact IT.';
+    } else if (error.code === 'auth/email-already-in-use') {
+      errorMsg = 'This email is already registered. Please login instead.';
+    }
+
+    return { success: false, error: errorMsg };
   }
 };
 
-// --- FIX: Get user data using Document Reference (Secure) ---
 export const getUserData = async (uid) => {
   try {
-    // OLD (Insecure): query(collection(db, 'users'), where('uid', '==', uid))
-    // NEW (Secure): Direct document access
     const userRef = doc(db, 'users', uid);
     const userSnap = await getDoc(userRef);
 
@@ -146,7 +154,6 @@ export const getUserData = async (uid) => {
   }
 };
 
-// Update user data
 export const updateUserData = async (uid, updates) => {
   try {
     await setDoc(doc(db, 'users', uid), updates, { merge: true });

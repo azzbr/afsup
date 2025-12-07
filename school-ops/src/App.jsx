@@ -1,9 +1,8 @@
-// ADDED setDoc for auto-recovery
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, deleteDoc, doc, addDoc, setDoc, serverTimestamp, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, deleteDoc, doc, addDoc, serverTimestamp, query, where } from 'firebase/firestore';
 import { db } from './firebase';
-import { initializeAuth, signInAsAnonymous, onAuthStateChange, getUserData, signOutUser } from './auth';
-import { ROLES } from './constants'; // Importing from new constants file
+import { initializeAuth, onAuthStateChange, signOutUser } from './auth';
+import { ROLES } from './constants';
 
 // Components
 import Layout from './Layout';
@@ -29,11 +28,20 @@ export default function App() {
 
   const isAuthenticated = user && !user.isAnonymous;
 
-  // --- 1. Auth & User Data Loading ---
+  // --- 1. Auth & User Data Loading (MEMORY SAFE VERSION) ---
   useEffect(() => {
     initializeAuth();
 
-    const unsubscribe = onAuthStateChange(async (u) => {
+    // TRACKER: Keep track of the document listener so we can kill it properly
+    let unsubscribeDoc = null;
+
+    const unsubscribeAuth = onAuthStateChange((u) => {
+      // 1. Cleanup previous document listener if it exists
+      if (unsubscribeDoc) {
+        unsubscribeDoc();
+        unsubscribeDoc = null;
+      }
+
       if (!u) {
         setUser(null);
         setUserData(null);
@@ -44,52 +52,34 @@ export default function App() {
 
       setUser(u);
 
-      if (!u.isAnonymous) {
-        try {
-          // 1. Try to fetch user data immediately
-          let result = await getUserData(u.uid);
-          let currentUserData = null;
+      if (u.isAnonymous) {
+        setUserData(null);
+        setActiveRole(ROLES.STAFF);
+        setAuthLoading(false);
+        return;
+      }
 
-          if (result.success) {
-            currentUserData = result.data;
-          } else {
-            // --- GRACE PERIOD FOR REGISTRATION ---
-            // If data is missing, it might be a new registration in progress.
-            // Wait 1.5 seconds to let LoginModal write the real data (FirstName, LastName, etc.)
-            await new Promise(resolve => setTimeout(resolve, 1500));
+      // --- 2. START LISTENER WITH TIMEOUT ---
 
-            // Retry fetch
-            result = await getUserData(u.uid);
+      // FAILSAFE: If Firestore takes longer than 10s, stop loading and error out
+      const timeoutId = setTimeout(async () => {
+        console.error("Timeout waiting for user profile");
+        alert("System Timeout: Unable to load your profile. Please check your connection and refresh.");
+        await signOutUser();
+        setAuthLoading(false);
+      }, 10000); // 10 seconds
 
-            if (result.success) {
-               currentUserData = result.data;
-            } else {
-               // --- SELF-HEALING (FALLBACK) ---
-               // If still missing after wait, it's a true "Zombie" account. Fix it.
-               console.warn("Auto-recovering missing profile for:", u.email);
-               const skeletonData = {
-                 uid: u.uid,
-                 email: u.email,
-                 displayName: u.displayName || u.email.split('@')[0],
-                 role: 'staff',
-                 status: 'pending',
-                 createdAt: serverTimestamp(),
-                 isActive: true,
-                 firstName: 'Unknown',
-                 lastName: 'User',
-                 nationality: 'Bahraini',
-                 iban: 'BH'
-               };
-               await setDoc(doc(db, 'users', u.uid), skeletonData);
-               currentUserData = skeletonData;
-            }
-          }
+      const userDocRef = doc(db, 'users', u.uid);
 
-          // --- SECURITY CHECK ---
-          // Block pending users.
-          // REMOVED ALERT to prevent UI freezing. LoginModal handles the success message now.
-          if (currentUserData.status !== 'approved' && currentUserData.role !== 'admin') {
-             // Just sign them out quietly. The LoginModal will show the "Success" message.
+      unsubscribeDoc = onSnapshot(userDocRef, async (docSnap) => {
+        // Success! Clear the failsafe timer
+        clearTimeout(timeoutId);
+
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+
+          // SECURITY CHECK: Block Pending Users
+          if (data.status !== 'approved' && data.role !== 'admin') {
              await signOutUser();
              setUser(null);
              setUserData(null);
@@ -98,33 +88,40 @@ export default function App() {
              return;
           }
 
-          setUserData(currentUserData);
+          setUserData(data);
 
-          // AUTO-SWITCH ROLE
-          if (currentUserData.viewAll || currentUserData.role === 'admin') {
+          // Role Switching
+          if (data.viewAll || data.role === 'admin') {
              setActiveRole(ROLES.ADMIN);
-          } else if (currentUserData.role === 'maintenance') {
+          } else if (data.role === 'maintenance') {
              setActiveRole(ROLES.MAINTENANCE);
-          } else if (currentUserData.role === 'hr') {
+          } else if (data.role === 'hr') {
              setActiveRole(ROLES.HR);
           } else {
              setActiveRole(ROLES.STAFF);
           }
-
-        } catch (err) {
-          console.error("Error processing user:", err);
-          await signOutUser();
+          setAuthLoading(false);
+        } else {
+          // Document doesn't exist yet.
+          // Since we used ATOMIC creation in auth.js, this should technically never happen
+          // unless the user was deleted manually from the database but not Auth.
+          console.log("Waiting for user profile creation...");
         }
-      } else {
-        // Anonymous user
-        setUserData(null);
-        setActiveRole(ROLES.STAFF);
-      }
-
-      setAuthLoading(false);
+      }, (error) => {
+        // Error! Clear timer
+        clearTimeout(timeoutId);
+        console.error("Profile fetch error", error);
+        alert("Database Error: " + error.message);
+        signOutUser();
+        setAuthLoading(false);
+      });
     });
 
-    return () => unsubscribe();
+    // FINAL CLEANUP: When App unmounts, kill both listeners
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeDoc) unsubscribeDoc();
+    };
   }, []);
 
   // --- 2. Ticket Fetching ---
@@ -238,7 +235,7 @@ export default function App() {
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-100 bg-slate-50/50">
               <h2 className="text-lg font-semibold text-slate-900">Submit New Request</h2>
-              <p className="text-sm text-slate-500">Please provide details about the issue.</p>
+              <p className="text-sm text-slate-500">Please describe the issue.</p>
             </div>
             <div className="p-6">
               <ReportForm user={user} onSuccess={() => alert('Report Submitted!')} />
