@@ -1,47 +1,23 @@
-import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, deleteDoc, doc, addDoc, serverTimestamp, query, where } from 'firebase/firestore';
-import { db } from './firebase';
-import { initializeAuth, onAuthStateChange, signOutUser } from './auth';
-import { ROLES } from './constants';
-
-// Components
-import Layout from './Layout';
-import MaintenanceView from './MaintenanceView';
-import AdminView from './AdminView';
-import UserProfile from './UserProfile';
-import ReportForm from './components/ReportForm';
-import EnhancedScheduleForm from './enhanced_scheduler';
-import LoginModal from './components/LoginModal';
-import HRSystem from './HRsys/HRSystem';
-
-import { Loader2 } from 'lucide-react';
-
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [userData, setUserData] = useState(null);
-  const [activeRole, setActiveRole] = useState(ROLES.STAFF);
-  const [tickets, setTickets] = useState([]);
-  const [scheduledTasks, setScheduledTasks] = useState([]);
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [showScheduleForm, setShowScheduleForm] = useState(false);
-  const [authLoading, setAuthLoading] = useState(true);
-
-  const isAuthenticated = user && !user.isAnonymous;
-
-  // --- 1. Auth & User Data Loading (MEMORY SAFE VERSION) ---
+// --- 1. Auth & User Data Loading (Refined & Memory Safe) ---
   useEffect(() => {
     initializeAuth();
-
-    // TRACKER: Keep track of the document listener so we can kill it properly
+    
+    // TRACKERS: Keep track of listeners and timeouts to prevent race conditions
     let unsubscribeDoc = null;
+    let timeoutId = null;
 
     const unsubscribeAuth = onAuthStateChange((u) => {
-      // 1. Cleanup previous document listener if it exists
+      // 1. CLEANUP: Stop previous listeners and timers
       if (unsubscribeDoc) {
         unsubscribeDoc();
         unsubscribeDoc = null;
       }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
 
+      // 2. HANDLE LOGOUT
       if (!u) {
         setUser(null);
         setUserData(null);
@@ -52,6 +28,7 @@ export default function App() {
 
       setUser(u);
 
+      // 3. HANDLE ANONYMOUS
       if (u.isAnonymous) {
         setUserData(null);
         setActiveRole(ROLES.STAFF);
@@ -59,25 +36,36 @@ export default function App() {
         return;
       }
 
-      // --- 2. START LISTENER WITH TIMEOUT ---
+      // --- 4. START LISTENER WITH TIMEOUT PROTECTION ---
+      
+      // Flag to prevent race condition (Timeout vs Success)
+      let hasTimedOut = false;
 
-      // FAILSAFE: If Firestore takes longer than 10s, stop loading and error out
-      const timeoutId = setTimeout(async () => {
+      // FAILSAFE: If Firestore takes longer than 10s, kill the process
+      timeoutId = setTimeout(async () => {
+        hasTimedOut = true; // Mark as timed out
         console.error("Timeout waiting for user profile");
+        
+        // Kill the listener so it doesn't try to run later
+        if (unsubscribeDoc) unsubscribeDoc();
+        
         alert("System Timeout: Unable to load your profile. Please check your connection and refresh.");
         await signOutUser();
         setAuthLoading(false);
       }, 10000); // 10 seconds
 
       const userDocRef = doc(db, 'users', u.uid);
-
+      
       unsubscribeDoc = onSnapshot(userDocRef, async (docSnap) => {
-        // Success! Clear the failsafe timer
+        // STOP if the timeout already won the race
+        if (hasTimedOut) return;
+        
+        // SUCCESS: Clear the failsafe timer
         clearTimeout(timeoutId);
 
         if (docSnap.exists()) {
           const data = docSnap.data();
-
+          
           // SECURITY CHECK: Block Pending Users
           if (data.status !== 'approved' && data.role !== 'admin') {
              await signOutUser();
@@ -102,14 +90,14 @@ export default function App() {
           }
           setAuthLoading(false);
         } else {
-          // Document doesn't exist yet.
-          // Since we used ATOMIC creation in auth.js, this should technically never happen
-          // unless the user was deleted manually from the database but not Auth.
+          // Document waiting creation...
           console.log("Waiting for user profile creation...");
         }
       }, (error) => {
-        // Error! Clear timer
+        // STOP if the timeout already won the race  
+        if (hasTimedOut) return;
         clearTimeout(timeoutId);
+        
         console.error("Profile fetch error", error);
         alert("Database Error: " + error.message);
         signOutUser();
@@ -117,172 +105,10 @@ export default function App() {
       });
     });
 
-    // FINAL CLEANUP: When App unmounts, kill both listeners
+    // FINAL CLEANUP: When App unmounts
     return () => {
       unsubscribeAuth();
       if (unsubscribeDoc) unsubscribeDoc();
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, []);
-
-  // --- 2. Ticket Fetching ---
-  useEffect(() => {
-    if (authLoading) return;
-
-    let q;
-    const collectionRef = collection(db, 'maintenance_tickets');
-
-    if (userData && (userData.role === 'admin' || userData.role === 'maintenance')) {
-        q = collectionRef;
-    } else if (user) {
-        q = query(collectionRef, where('reportedBy', '==', user.uid));
-    } else {
-        setTickets([]);
-        return;
-    }
-
-    const unsub = onSnapshot(q, (snap) => {
-      const data = snap.docs.map(d => ({
-        id: d.id,
-        ...d.data(),
-        createdAt: d.data().createdAt?.toDate() || new Date()
-      }));
-
-      data.sort((a, b) => {
-        if (a.status === 'resolved' && b.status !== 'resolved') return 1;
-        if (a.status !== 'resolved' && b.status === 'resolved') return -1;
-        return b.createdAt - a.createdAt;
-      });
-      setTickets(data);
-    }, (error) => {
-        console.error("Ticket fetch error:", error);
-        if (error.code === 'permission-denied') setTickets([]);
-    });
-
-    return () => unsub();
-  }, [user, userData, authLoading]);
-
-  // --- 3. Handlers ---
-  const handleCreateSchedule = async (data) => {
-    try {
-        const enhancedData = {
-            ...data,
-            createdAt: serverTimestamp(),
-            createdBy: user.uid,
-            lastRun: data.isStartImmediately ? serverTimestamp() : null,
-            isActive: true,
-            totalLocations: data.locations.length,
-            nextDue: data.nextRun ? new Date(data.nextRun) : null
-        };
-        await addDoc(collection(db, 'scheduled_tasks'), enhancedData);
-        setShowScheduleForm(false);
-        alert("Schedule Created Successfully");
-    } catch(err) {
-        console.error(err);
-        alert(err.message);
-    }
-  };
-
-  const handleDeleteTicket = async (id) => {
-    if(confirm("Delete this ticket?")) await deleteDoc(doc(db, 'maintenance_tickets', id));
-  };
-
-  if (authLoading) {
-    return (
-      <div className="h-screen w-full flex items-center justify-center bg-slate-50">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
-          <p className="text-slate-500 font-medium">Loading System...</p>
-        </div>
-      </div>
-    );
-  }
-
-  const handleProfileClick = () => {
-    setActiveRole('profile');
-  };
-
-  return (
-    <Layout
-      user={user}
-      userData={userData}
-      activeRole={activeRole}
-      setActiveRole={setActiveRole}
-      onSignOut={signOutUser}
-      onLoginClick={() => setShowLoginModal(true)}
-      onProfileClick={handleProfileClick}
-    >
-      {activeRole !== ROLES.STAFF && (
-        <div className="mb-8">
-          <h1 className="text-2xl md:text-3xl font-bold text-slate-900">
-            {activeRole === ROLES.ADMIN ? 'Admin Overview' :
-             activeRole === ROLES.HR ? 'HR Management' :
-             activeRole === ROLES.MAINTENANCE ? 'Maintenance Queue' :
-             activeRole === 'profile' ? 'My Profile' :
-             activeRole === 'user_info' ? 'User Information' :
-             'Support Portal'}
-          </h1>
-          <p className="text-slate-500 mt-1">
-            {activeRole === 'profile' ? 'View and update your personal information.' :
-             activeRole === 'user_info' ? 'Staff directory and contact information.' :
-             'Manage school operations and maintenance tasks.'}
-          </p>
-        </div>
-      )}
-
-      {/* 1. STAFF VIEW */}
-      {activeRole === ROLES.STAFF && (
-        <div className="max-w-2xl mx-auto">
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-              <h2 className="text-lg font-semibold text-slate-900">Submit New Request</h2>
-              <p className="text-sm text-slate-500">Please describe the issue.</p>
-            </div>
-            <div className="p-6">
-              <ReportForm user={user} onSuccess={() => alert('Report Submitted!')} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 2. MAINTENANCE VIEW */}
-      {isAuthenticated && activeRole === ROLES.MAINTENANCE && (
-        <MaintenanceView tickets={tickets} user={user} userData={userData} />
-      )}
-
-      {/* 3. ADMIN VIEW */}
-      {isAuthenticated && activeRole === ROLES.ADMIN && (
-        <AdminView
-          tickets={tickets}
-          user={user}
-          userData={userData}
-          onCreateSchedule={() => setShowScheduleForm(true)}
-          onDeleteTicket={handleDeleteTicket}
-        />
-      )}
-
-      {/* 4. USER INFO / HR SYSTEM */}
-      {isAuthenticated && (activeRole === 'user_info' || activeRole === ROLES.HR) && (
-        <HRSystem user={user} userData={userData} />
-      )}
-
-      {/* 5. PROFILE VIEW */}
-      {isAuthenticated && activeRole === 'profile' && (
-        <UserProfile userData={userData} user={user} />
-      )}
-
-      {showLoginModal && (
-        <LoginModal isOpen={showLoginModal} onClose={() => setShowLoginModal(false)} />
-      )}
-
-      {showScheduleForm && (
-        <EnhancedScheduleForm
-          isOpen={showScheduleForm}
-          onClose={() => setShowScheduleForm(false)}
-          onSubmit={handleCreateSchedule}
-          user={user}
-        />
-      )}
-
-    </Layout>
-  );
-}
