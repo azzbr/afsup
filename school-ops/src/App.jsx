@@ -46,50 +46,58 @@ export default function App() {
 
       if (!u.isAnonymous) {
         try {
-          // Try to get existing profile
-          const result = await getUserData(u.uid);
-          
+          // 1. Try to fetch user data immediately
+          let result = await getUserData(u.uid);
           let currentUserData = null;
 
           if (result.success) {
             currentUserData = result.data;
           } else {
-            // --- SELF-HEALING LOGIC ---
-            // User exists in Auth but not in Database. 
-            // Automatically create a "Pending" profile so they show in Admin List.
-            console.warn("Missing profile detected. Auto-recovering user:", u.email);
-            
-            const skeletonData = {
-              uid: u.uid,
-              email: u.email,
-              displayName: u.displayName || u.email.split('@')[0], // Fallback name
-              role: 'staff',
-              status: 'pending', // FORCE PENDING
-              createdAt: serverTimestamp(),
-              isActive: true,
-              // Add basic HR fields to prevent crashes
-              firstName: 'Unknown',
-              lastName: 'User',
-              nationality: 'Bahraini',
-              iban: 'BH'
-            };
+            // --- GRACE PERIOD FOR REGISTRATION ---
+            // If data is missing, it might be a new registration in progress.
+            // Wait 1.5 seconds to let LoginModal write the real data (FirstName, LastName, etc.)
+            await new Promise(resolve => setTimeout(resolve, 1500));
 
-            await setDoc(doc(db, 'users', u.uid), skeletonData);
-            currentUserData = skeletonData; // Use this new data immediately
+            // Retry fetch
+            result = await getUserData(u.uid);
+
+            if (result.success) {
+               currentUserData = result.data;
+            } else {
+               // --- SELF-HEALING (FALLBACK) ---
+               // If still missing after wait, it's a true "Zombie" account. Fix it.
+               console.warn("Auto-recovering missing profile for:", u.email);
+               const skeletonData = {
+                 uid: u.uid,
+                 email: u.email,
+                 displayName: u.displayName || u.email.split('@')[0],
+                 role: 'staff',
+                 status: 'pending',
+                 createdAt: serverTimestamp(),
+                 isActive: true,
+                 firstName: 'Unknown',
+                 lastName: 'User',
+                 nationality: 'Bahraini',
+                 iban: 'BH'
+               };
+               await setDoc(doc(db, 'users', u.uid), skeletonData);
+               currentUserData = skeletonData;
+            }
           }
 
           // --- SECURITY CHECK ---
-          // Now that we have data (either found or auto-created), check status
+          // Block pending users.
+          // REMOVED ALERT to prevent UI freezing. LoginModal handles the success message now.
           if (currentUserData.status !== 'approved' && currentUserData.role !== 'admin') {
-             alert("Registration Successful! Your account is now pending approval by an administrator.");
+             // Just sign them out quietly. The LoginModal will show the "Success" message.
              await signOutUser();
              setUser(null);
              setUserData(null);
              setActiveRole(ROLES.STAFF);
              setAuthLoading(false);
-             return; 
+             return;
           }
-          
+
           setUserData(currentUserData);
 
           // AUTO-SWITCH ROLE
@@ -97,7 +105,7 @@ export default function App() {
              setActiveRole(ROLES.ADMIN);
           } else if (currentUserData.role === 'maintenance') {
              setActiveRole(ROLES.MAINTENANCE);
-          } else if (currentUserData.role === 'hr') { // Added HR role switch
+          } else if (currentUserData.role === 'hr') {
              setActiveRole(ROLES.HR);
           } else {
              setActiveRole(ROLES.STAFF);
