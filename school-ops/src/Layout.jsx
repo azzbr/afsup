@@ -13,8 +13,7 @@ import {
 } from 'lucide-react';
 
 // Use the uploaded logo (Ensure this file exists in your assets folder)
-// Temporary fix: Uncomment import once Logo.jpg is restored
-const logo = null; // Remove this line after adding Logo.jpg file
+import logo from './assets/LogoT.png'; // Use the actual logo image
 
 export default function Layout({
   children,
@@ -144,8 +143,8 @@ export default function Layout({
                 </div>
               )}
 
-              {/* Profile Button for Non-Admin Users */}
-              {isRealUser && userData?.role !== 'admin' && (
+              {/* Profile Button for All Users */}
+              {isRealUser && (
                 <div className="mb-4">
                   <p className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                     My Account

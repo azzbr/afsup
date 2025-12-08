@@ -53,8 +53,6 @@ export default function UserProfile({ userData, user }) {
         housingAllowance: userData.housingAllowance || '',
         transportAllowance: userData.transportAllowance || '',
         phoneAllowance: userData.phoneAllowance || '',
-        bankName: userData.bankName || BAHRAIN_BANKS[0],
-        iban: userData.iban || 'BH',
 
         // Contact
         phoneNumber: userData.phoneNumber || ''
