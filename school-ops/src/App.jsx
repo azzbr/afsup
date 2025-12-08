@@ -27,7 +27,7 @@ export default function App() {
 
   const isAuthenticated = user && !user.isAnonymous;
 
-  // --- 1. Auth & User Data Loading (FIXED RACE CONDITION) ---
+  // --- 1. Auth & User Data Loading (WITH POLLING) ---
   useEffect(() => {
     initializeAuth();
 
@@ -242,8 +242,6 @@ export default function App() {
           <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
           <p className="text-slate-500 font-medium">Loading System...</p>
         </div>
-      </div>
-    );
       </div>
     );
   }

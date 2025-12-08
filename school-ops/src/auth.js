@@ -57,9 +57,14 @@ export const onAuthStateChange = (callback) => {
 // Super admin email - this account is auto-approved with admin role
 const SUPER_ADMIN_EMAIL = 'admin@afs.edu.bh';
 
-// --- ATOMIC USER CREATION (KEEP USER SIGNED IN) ---
+// --- ATOMIC USER CREATION WITH REGISTRATION FLAG ---
 export const createUserAccount = async (email, password, nameData) => {
   console.log('🔵 STEP 1: Starting createUserAccount for:', email);
+  
+  // SET FLAG: Tell App.jsx to IGNORE this user during registration
+  localStorage.setItem('REGISTRATION_IN_PROGRESS', 'true');
+  console.log('🔵 STEP 1.5: Set registration flag to prevent App.jsx interference');
+  
   let user = null;
 
   try {
@@ -84,7 +89,7 @@ export const createUserAccount = async (email, password, nameData) => {
     });
     console.log('✅ STEP 5: Profile updated');
 
-    // 3. Create user record in Firestore (user is still signed in, has permissions)
+    // 3. Create user record in Firestore
     const userDoc = {
       uid: user.uid,
       email: user.email,
@@ -118,13 +123,21 @@ export const createUserAccount = async (email, password, nameData) => {
 
     console.log('🔵 STEP 6: Writing to Firestore (user is authenticated)...');
 
-    // Write the document - App.jsx will wait for this to complete before starting listener
+    // Write the document
     await setDoc(doc(db, 'users', user.uid), userDoc);
 
     console.log('✅ STEP 6: Firestore document created successfully!');
+    
+    // Sign out immediately after writing
+    console.log('🔵 STEP 7: Signing out user...');
+    await signOut(auth);
+    console.log('✅ STEP 7: User signed out');
+    
+    // CLEAR FLAG: Registration complete
+    localStorage.removeItem('REGISTRATION_IN_PROGRESS');
+    console.log('✅ STEP 8: Cleared registration flag');
+    
     console.log('✅ ALL STEPS COMPLETE - Registration successful');
-
-    // NOTE: User remains signed in. App.jsx will detect them and sign them out if status is pending.
 
     return { success: true, user: user, isSuperAdmin };
 
@@ -132,8 +145,11 @@ export const createUserAccount = async (email, password, nameData) => {
     console.error('❌ ERROR in createUserAccount:', error);
     console.error('❌ Error code:', error.code);
     console.error('❌ Error message:', error.message);
+    
+    // CLEAR FLAG: Registration failed
+    localStorage.removeItem('REGISTRATION_IN_PROGRESS');
 
-    // ROLLBACK: If anything failed, delete the Auth user
+    // ROLLBACK: Delete the Auth user
     if (user) {
       console.log('⚠️ ROLLBACK: Attempting to delete orphaned auth user...');
       try {
