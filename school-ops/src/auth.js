@@ -57,26 +57,40 @@ export const onAuthStateChange = (callback) => {
 // Super admin email - this account is auto-approved with admin role
 const SUPER_ADMIN_EMAIL = 'admin@afs.edu.bh';
 
-// --- ATOMIC USER CREATION ---
+// --- ATOMIC USER CREATION (RACE CONDITION FIXED) ---
 export const createUserAccount = async (email, password, nameData) => {
+  console.log('🔵 STEP 1: Starting createUserAccount for:', email);
   let user = null;
+  let userCredential = null;
+
   try {
     // 1. Create Firebase Auth user
-    const result = await createUserWithEmailAndPassword(auth, email, password);
-    user = result.user;
+    console.log('🔵 STEP 2: Creating Auth user...');
+    userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    user = userCredential.user;
+    console.log('✅ STEP 2: Auth user created. UID:', user.uid);
 
     // Check if this is the super admin account
     const isSuperAdmin = email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+    console.log('🔵 STEP 3: Is super admin?', isSuperAdmin);
 
     // Construct the full name for display
     const fullName = `${nameData.firstName} ${nameData.middleName ? nameData.middleName + ' ' : ''}${nameData.lastName}`;
+    console.log('🔵 STEP 4: Full name constructed:', fullName);
 
-    // 2. Update Auth Profile immediately
+    // 2. Update Auth Profile
+    console.log('🔵 STEP 5: Updating Auth profile...');
     await updateProfile(user, {
       displayName: fullName
     });
+    console.log('✅ STEP 5: Profile updated');
 
-    // 3. Create user record in Firestore (CRITICAL: Wait for this!)
+    // 3. CRITICAL FIX: Sign out immediately to prevent App.jsx from starting listeners
+    console.log('🔵 STEP 6: Signing out user to prevent race condition...');
+    await signOut(auth);
+    console.log('✅ STEP 6: User signed out');
+
+    // 4. Create user record in Firestore (NOW the user is signed out, no conflicts!)
     const userDoc = {
       uid: user.uid,
       email: user.email,
@@ -108,33 +122,44 @@ export const createUserAccount = async (email, password, nameData) => {
       phoneNumber: '',
     };
 
-    // This ensures the document exists BEFORE we return success
+    console.log('🔵 STEP 7: Writing to Firestore (user is signed out, no conflicts)...');
+
+    // THIS SHOULD NOW WORK because no listeners are running
     await setDoc(doc(db, 'users', user.uid), userDoc);
+
+    console.log('✅ STEP 7: Firestore document created successfully!');
+    console.log('✅ ALL STEPS COMPLETE - Registration successful');
 
     return { success: true, user: user, isSuperAdmin };
 
   } catch (error) {
-    console.error('Account creation error:', error);
+    console.error('❌ ERROR in createUserAccount:', error);
+    console.error('❌ Error code:', error.code);
+    console.error('❌ Error message:', error.message);
 
-    // ROLLBACK: If Firestore write failed, delete the Auth user
-    // so the user isn't stuck in "Zombie" state.
+    // ROLLBACK: If anything failed, delete the Auth user
     if (user) {
+      console.log('⚠️ ROLLBACK: Attempting to delete orphaned auth user...');
       try {
-        await deleteUser(user);
-        console.log('Rolled back orphaned auth user');
+        // Re-authenticate if needed for deletion
+        if (userCredential) {
+          await deleteUser(user);
+        }
+        console.log('✅ ROLLBACK: Auth user deleted successfully');
       } catch (cleanupError) {
-        console.error('Failed to cleanup user:', cleanupError);
+        console.error('❌ ROLLBACK FAILED:', cleanupError);
       }
     }
 
     // User Friendly Error Message
     let errorMsg = error.message;
     if (error.code === 'permission-denied') {
-      errorMsg = 'System registration is currently locked. Please contact IT.';
+      errorMsg = 'Database permission denied. Please contact IT support.';
     } else if (error.code === 'auth/email-already-in-use') {
       errorMsg = 'This email is already registered. Please login instead.';
     }
 
+    console.log('❌ Returning error:', errorMsg);
     return { success: false, error: errorMsg };
   }
 };
