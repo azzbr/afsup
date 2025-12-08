@@ -27,7 +27,7 @@ export default function App() {
 
   const isAuthenticated = user && !user.isAnonymous;
 
-  // --- 1. Auth & User Data Loading (WITH POLLING) ---
+  // --- 1. Auth & User Data Loading (WITH REGISTRATION FLAG CHECK) ---
   useEffect(() => {
     initializeAuth();
 
@@ -53,6 +53,15 @@ export default function App() {
         return;
       }
 
+      // ===  CRITICAL CHECK: Is registration in progress? ===
+      const registrationInProgress = localStorage.getItem('REGISTRATION_IN_PROGRESS');
+      if (registrationInProgress === 'true') {
+        console.log('⚠️ Registration in progress - App.jsx will not process this user');
+        // Don't set user, don't start listeners, just exit
+        // auth.js will handle everything and clear the flag when done
+        return;
+      }
+
       setUser(u);
 
       if (u.isAnonymous) {
@@ -62,30 +71,27 @@ export default function App() {
         return;
       }
 
-      // --- CRITICAL FIX: Poll until document truly exists ---
-      console.log('🔵 Waiting for user document to be fully created...');
+      // --- Poll until document exists ---
+      console.log('🔵 Waiting for user document...');
 
       const userDocRef = doc(db, 'users', u.uid);
 
-      // Poll for document existence with retries
       let docExists = false;
       let attempts = 0;
-      const maxAttempts = 10; // 10 attempts = 5 seconds max
+      const maxAttempts = 10;
 
       while (!docExists && attempts < maxAttempts) {
         attempts++;
         console.log(`🔵 Attempt ${attempts}/${maxAttempts}: Checking document...`);
-
+        
         try {
-          // Wait 500ms between checks to avoid hammering Firestore
           if (attempts > 1) {
             await new Promise(resolve => setTimeout(resolve, 500));
           }
-
+          
           const docSnap = await getDoc(userDocRef);
-
+          
           if (docSnap.exists()) {
-            // Verify the document has actual data (not just cached/pending)
             const data = docSnap.data();
             if (data && data.uid === u.uid && data.email) {
               docExists = true;
@@ -98,19 +104,18 @@ export default function App() {
           }
         } catch (error) {
           console.error('⚠️ Error checking document:', error);
-          // Continue retrying even on error
         }
       }
 
       if (!docExists) {
-        console.error('❌ Document verification timeout after 5 seconds');
+        console.error('❌ Document verification timeout');
         alert('Registration incomplete. Please try logging in again.');
         await signOutUser();
         setAuthLoading(false);
         return;
       }
 
-      // --- NOW start the real-time listener (document is guaranteed to exist) ---
+      // --- Start real-time listener ---
 
       let hasTimedOut = false;
 
@@ -118,7 +123,7 @@ export default function App() {
         hasTimedOut = true;
         console.error("Timeout waiting for user profile");
         if (unsubscribeDoc) unsubscribeDoc();
-        alert("System Timeout: Unable to load your profile. Please refresh.");
+        alert("System Timeout: Unable to load your profile.");
         await signOutUser();
         setAuthLoading(false);
       }, 10000);
