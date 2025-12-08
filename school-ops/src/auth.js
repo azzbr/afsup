@@ -57,17 +57,16 @@ export const onAuthStateChange = (callback) => {
 // Super admin email - this account is auto-approved with admin role
 const SUPER_ADMIN_EMAIL = 'admin@afs.edu.bh';
 
-// --- ATOMIC USER CREATION (RACE CONDITION FIXED) ---
+// --- ATOMIC USER CREATION (KEEP USER SIGNED IN) ---
 export const createUserAccount = async (email, password, nameData) => {
   console.log('🔵 STEP 1: Starting createUserAccount for:', email);
   let user = null;
-  let userCredential = null;
 
   try {
-    // 1. Create Firebase Auth user
+    // 1. Create Firebase Auth user (they get auto-logged in)
     console.log('🔵 STEP 2: Creating Auth user...');
-    userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    user = userCredential.user;
+    const result = await createUserWithEmailAndPassword(auth, email, password);
+    user = result.user;
     console.log('✅ STEP 2: Auth user created. UID:', user.uid);
 
     // Check if this is the super admin account
@@ -85,12 +84,7 @@ export const createUserAccount = async (email, password, nameData) => {
     });
     console.log('✅ STEP 5: Profile updated');
 
-    // 3. CRITICAL FIX: Sign out immediately to prevent App.jsx from starting listeners
-    console.log('🔵 STEP 6: Signing out user to prevent race condition...');
-    await signOut(auth);
-    console.log('✅ STEP 6: User signed out');
-
-    // 4. Create user record in Firestore (NOW the user is signed out, no conflicts!)
+    // 3. Create user record in Firestore (user is still signed in, has permissions)
     const userDoc = {
       uid: user.uid,
       email: user.email,
@@ -122,13 +116,15 @@ export const createUserAccount = async (email, password, nameData) => {
       phoneNumber: '',
     };
 
-    console.log('🔵 STEP 7: Writing to Firestore (user is signed out, no conflicts)...');
+    console.log('🔵 STEP 6: Writing to Firestore (user is authenticated)...');
 
-    // THIS SHOULD NOW WORK because no listeners are running
+    // Write the document - App.jsx will wait for this to complete before starting listener
     await setDoc(doc(db, 'users', user.uid), userDoc);
 
-    console.log('✅ STEP 7: Firestore document created successfully!');
+    console.log('✅ STEP 6: Firestore document created successfully!');
     console.log('✅ ALL STEPS COMPLETE - Registration successful');
+
+    // NOTE: User remains signed in. App.jsx will detect them and sign them out if status is pending.
 
     return { success: true, user: user, isSuperAdmin };
 
@@ -141,10 +137,7 @@ export const createUserAccount = async (email, password, nameData) => {
     if (user) {
       console.log('⚠️ ROLLBACK: Attempting to delete orphaned auth user...');
       try {
-        // Re-authenticate if needed for deletion
-        if (userCredential) {
-          await deleteUser(user);
-        }
+        await deleteUser(user);
         console.log('✅ ROLLBACK: Auth user deleted successfully');
       } catch (cleanupError) {
         console.error('❌ ROLLBACK FAILED:', cleanupError);
