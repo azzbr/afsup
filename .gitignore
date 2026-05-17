@@ -1,0 +1,23 @@
+# Local Claude Code state (per-machine, not for sharing)
+.claude/
+
+# Defense-in-depth: each subproject has its own .gitignore but these
+# duplicates ensure compiled output / dependencies are never accidentally
+# included from the root.
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+functions/lib/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Editor cruft
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.swp

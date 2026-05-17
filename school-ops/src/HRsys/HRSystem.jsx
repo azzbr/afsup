@@ -1,8 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import React, { useState, useEffect, useMemo } from 'react';
+import { doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { auditUpdate } from '../data/audit';
+import { actorFrom, can } from '../permissions';
+import { useUsers } from '../data/useUsers';
+import { useLeaveRequests } from '../data/useLeaveRequests';
+import { resolveBalances, debitLeave } from '../hr/leave';
 import HRDirectory from './HRDirectory';
 import EmployeeDetailView from './EmployeeDetailView';
+import InviteEmployeeModal from './InviteEmployeeModal';
+import HRReports from './HRReports';
 import {
   Users, AlertTriangle, Calendar, FileText, Bell, Settings,
   TrendingUp, Clock, CheckCircle, UserPlus, Briefcase, Shield,
@@ -319,110 +326,254 @@ const NationalityBreakdown = ({ users }) => {
 };
 
 // ============================================================================
+// BIRTHDAYS + ANNIVERSARIES WIDGET
+//
+// Surfaces upcoming employee birthdays and work anniversaries on the HR
+// dashboard. Looks ahead 30 days. Pure JSX — no Firestore calls.
+// ============================================================================
+
+function nextOccurrence(date, fromDate = new Date()) {
+  if (!(date instanceof Date)) return null;
+  const next = new Date(fromDate.getFullYear(), date.getMonth(), date.getDate());
+  if (next < new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate())) {
+    next.setFullYear(fromDate.getFullYear() + 1);
+  }
+  return next;
+}
+
+function daysBetween(a, b) {
+  const ms = b.getTime() - a.getTime();
+  return Math.round(ms / (1000 * 60 * 60 * 24));
+}
+
+const BirthdaysAnniversariesWidget = ({ employees }) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const horizon = new Date(today); horizon.setDate(today.getDate() + 30);
+
+  const items = [];
+  employees.forEach(u => {
+    const name = u.displayName || u.email;
+
+    if (u.dateOfBirth instanceof Date) {
+      const next = nextOccurrence(u.dateOfBirth, today);
+      if (next && next >= today && next <= horizon) {
+        items.push({
+          kind: 'birthday',
+          name,
+          date: next,
+          daysAway: daysBetween(today, next),
+          detail: 'Birthday',
+        });
+      }
+    }
+
+    if (u.dateOfJoining instanceof Date) {
+      const next = nextOccurrence(u.dateOfJoining, today);
+      if (next && next >= today && next <= horizon) {
+        const years = next.getFullYear() - u.dateOfJoining.getFullYear();
+        if (years > 0) {
+          items.push({
+            kind: 'anniversary',
+            name,
+            date: next,
+            daysAway: daysBetween(today, next),
+            detail: `${years}-year work anniversary`,
+            milestone: [1, 3, 5, 10, 15, 20].includes(years),
+          });
+        }
+      }
+    }
+  });
+
+  items.sort((a, b) => a.daysAway - b.daysAway);
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-10 h-10 rounded-xl bg-pink-100 flex items-center justify-center">
+          <Calendar size={20} className="text-pink-600" />
+        </div>
+        <div>
+          <h3 className="font-bold text-slate-800">Upcoming (next 30 days)</h3>
+          <p className="text-sm text-slate-500">Birthdays + work anniversaries</p>
+        </div>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="bg-slate-50 border border-slate-100 rounded-xl p-5 text-center">
+          <p className="text-sm text-slate-500">Nothing in the next 30 days.</p>
+        </div>
+      ) : (
+        <ul className="space-y-2 max-h-80 overflow-y-auto">
+          {items.map((it, i) => (
+            <li
+              key={i}
+              className={`flex items-center justify-between p-3 rounded-xl border ${
+                it.kind === 'birthday' ? 'bg-pink-50 border-pink-100' : 'bg-amber-50 border-amber-100'
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-slate-800 truncate">{it.name}</p>
+                <p className="text-xs text-slate-500">
+                  {it.detail}{it.milestone && ' 🎉'}
+                </p>
+              </div>
+              <div className="text-right shrink-0 ml-2">
+                <p className="text-xs font-bold text-slate-700">
+                  {it.daysAway === 0 ? 'Today' : `in ${it.daysAway}d`}
+                </p>
+                <p className="text-[10px] text-slate-400">
+                  {it.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// COMPLIANCE ALERTS (pure — module-scope)
+//
+// Accepts a user list where expiry fields have already been normalized to
+// JS Dates by the data hook (useUsers convertUser).
+//
+// Phase 2.5 added: MOE approval expiry, contract end date, probation end date.
+// Phase 4 will move this whole function to a scheduled Cloud Function that
+// writes notifications/ docs instead of recomputing on every dashboard load.
+// ============================================================================
+
+function calculateComplianceAlerts(users) {
+  const alerts = [];
+  const now = new Date();
+  const sixtyDays = new Date(); sixtyDays.setDate(now.getDate() + 60);
+  const ninetyDays = new Date(); ninetyDays.setDate(now.getDate() + 90);
+  const thirtyDays = new Date(); thirtyDays.setDate(now.getDate() + 30);
+
+  users.forEach(u => {
+    const name = u.displayName || u.email;
+
+    // -------- CPR (always required for Bahrain residents)
+    if (u.cprExpiry instanceof Date) {
+      if (u.cprExpiry < now) {
+        alerts.push({ priority: 'critical', msg: `CPR Expired: ${name}`, employee: u });
+      } else if (u.cprExpiry < ninetyDays) {
+        alerts.push({ priority: 'warning', msg: `CPR Expiring: ${name}`, employee: u });
+      }
+    }
+
+    // -------- Residence Permit (non-Bahrainis only, LMRA-critical)
+    if (u.nationality !== 'Bahraini' && u.residencePermitExpiry instanceof Date) {
+      if (u.residencePermitExpiry < now) {
+        alerts.push({ priority: 'critical', msg: `Visa Expired: ${name}`, employee: u });
+      } else if (u.residencePermitExpiry < thirtyDays) {
+        alerts.push({ priority: 'warning', msg: `Visa Expiring: ${name}`, employee: u });
+      }
+    }
+
+    // -------- MOE Approval (teachers only)
+    if (u.isTeacher) {
+      if (u.moeApprovalStatus === 'expired' || u.moeApprovalStatus === 'rejected') {
+        alerts.push({ priority: 'critical', msg: `MOE Approval ${u.moeApprovalStatus}: ${name}`, employee: u });
+      } else if (u.moeApprovalExpiry instanceof Date) {
+        if (u.moeApprovalExpiry < now) {
+          alerts.push({ priority: 'critical', msg: `MOE Approval Expired: ${name}`, employee: u });
+        } else if (u.moeApprovalExpiry < ninetyDays) {
+          alerts.push({ priority: 'warning', msg: `MOE Approval Expiring: ${name}`, employee: u });
+        }
+      } else if (u.moeApprovalStatus === 'pending') {
+        alerts.push({ priority: 'warning', msg: `MOE Approval pending: ${name}`, employee: u });
+      }
+    }
+
+    // -------- Contract end date (fixed-term only)
+    if (u.contractEndDate instanceof Date && u.contractType === 'fixed_term') {
+      if (u.contractEndDate < now) {
+        alerts.push({ priority: 'critical', msg: `Contract Expired: ${name}`, employee: u });
+      } else if (u.contractEndDate < sixtyDays) {
+        alerts.push({ priority: 'warning', msg: `Contract Renewal Due: ${name}`, employee: u });
+      }
+    }
+
+    // -------- Probation end (HR needs to confirm or extend)
+    if (u.probationEndDate instanceof Date) {
+      if (u.probationEndDate < now) {
+        // Past probation but still flagged — HR hasn't confirmed yet
+        alerts.push({ priority: 'info', msg: `Confirm Probation: ${name}`, employee: u });
+      } else if (u.probationEndDate < thirtyDays) {
+        alerts.push({ priority: 'warning', msg: `Probation Ending Soon: ${name}`, employee: u });
+      }
+    }
+
+    // -------- Bank IBAN format (WPS compliance)
+    if (!u.iban || !u.iban.startsWith('BH')) {
+      alerts.push({ priority: 'info', msg: `Missing/Invalid IBAN: ${name}`, employee: u });
+    }
+  });
+
+  const order = { critical: 3, warning: 2, info: 1 };
+  return alerts.sort((a, b) => order[b.priority] - order[a.priority]);
+}
+
+// ============================================================================
 // MAIN HR SYSTEM COMPONENT
 // ============================================================================
 
-export default function HRSystem({ user, userData }) {
-  const [activeView, setActiveView] = useState('dashboard'); // 'dashboard', 'directory', 'employee'
-  const [employees, setEmployees] = useState([]);
+export default function HRSystem({ user, userData, initialView = 'dashboard', initialEmployeeUid = null }) {
+  const [activeView, setActiveView] = useState(initialView); // 'dashboard', 'directory', 'employee'
   const [selectedEmployee, setSelectedEmployee] = useState(null);
-  const [leaveRequests, setLeaveRequests] = useState([]);
-  const [complianceAlerts, setComplianceAlerts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  
-  // Permission check
-  const canManage = ['admin', 'hr'].includes(userData?.role);
-  
-  // Load all data
+  const [showInviteModal, setShowInviteModal] = useState(false);
+
+  const actor = actorFrom(userData);
+
+  // Live data from Firestore — subscriptions auto-update after mutations.
+  const { data: allUsers = [], isLoading: usersLoading } = useUsers(Boolean(userData));
+  const { data: pendingLeaveRaw = [], isLoading: leaveLoading } =
+    useLeaveRequests(actor, 'pending');
+
+  const loading = usersLoading || leaveLoading;
+
+  // Filter by what the current actor is allowed to see (replaces hand-rolled
+  // role check). Adds an `id` alias since most existing UI uses `e.id`.
+  const employees = useMemo(() => {
+    return allUsers
+      .filter(u => can(actor, 'user.view.profile', {
+        type: 'user',
+        data: { uid: u.uid, role: u.role || 'staff' },
+      }))
+      .map(u => ({ ...u, id: u.uid }));
+  }, [allUsers, actor]);
+
+  // Pending leave requests sorted by submission time, newest first.
+  const leaveRequests = useMemo(() => {
+    return [...pendingLeaveRaw].sort((a, b) => {
+      const at = a.submittedAt instanceof Date ? a.submittedAt.getTime() : 0;
+      const bt = b.submittedAt instanceof Date ? b.submittedAt.getTime() : 0;
+      return bt - at;
+    });
+  }, [pendingLeaveRaw]);
+
+  const complianceAlerts = useMemo(
+    () => calculateComplianceAlerts(employees),
+    [employees]
+  );
+
+  // When opened via /employees/:uid, auto-select that employee once loaded.
+  // setState in effect is intentional here: we're syncing UI state to a route
+  // param whose target appears asynchronously via the live users subscription.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      try {
-        // Load employees
-        const usersSnapshot = await getDocs(collection(db, 'users'));
-        const usersData = usersSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        
-        // Filter based on permissions
-        const filtered = usersData.filter(emp => {
-          const myRole = userData?.role;
-          const targetRole = emp.role || 'staff';
-          
-          if (myRole === 'admin') return true;
-          if (myRole === 'hr') return ['staff', 'maintenance', 'hr'].includes(targetRole);
-          if (myRole === 'maintenance') return ['staff', 'maintenance'].includes(targetRole);
-          return targetRole === 'staff';
-        });
-        
-        setEmployees(filtered);
-        
-        // Calculate compliance alerts
-        const alerts = calculateComplianceAlerts(filtered);
-        setComplianceAlerts(alerts);
-        
-        // Load pending leave requests
-        try {
-          const leaveQuery = query(
-            collection(db, 'leave_requests'),
-            where('status', '==', 'pending'),
-            orderBy('submittedAt', 'desc')
-          );
-          const leaveSnapshot = await getDocs(leaveQuery);
-          setLeaveRequests(leaveSnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-        } catch (e) {
-          console.log('Leave requests collection may not exist yet:', e);
-          setLeaveRequests([]);
-        }
-        
-      } catch (error) {
-        console.error('Error loading HR data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    if (userData) loadData();
-  }, [userData]);
-  
-  // Calculate compliance alerts
-  const calculateComplianceAlerts = (users) => {
-    const alerts = [];
-    const now = new Date();
-    const threeMonths = new Date(); threeMonths.setMonth(now.getMonth() + 3);
-    const oneMonth = new Date(); oneMonth.setMonth(now.getMonth() + 1);
-    
-    users.forEach(u => {
-      // CPR Expiry
-      if (u.cprExpiry?.toDate) {
-        const expiry = u.cprExpiry.toDate();
-        if (expiry < now) {
-          alerts.push({ priority: 'critical', msg: `CPR Expired: ${u.displayName || u.email}`, employee: u });
-        } else if (expiry < threeMonths) {
-          alerts.push({ priority: 'warning', msg: `CPR Expiring: ${u.displayName || u.email}`, employee: u });
-        }
-      }
-      
-      // Visa Expiry
-      if (u.nationality !== 'Bahraini' && u.residencePermitExpiry?.toDate) {
-        const expiry = u.residencePermitExpiry.toDate();
-        if (expiry < now) {
-          alerts.push({ priority: 'critical', msg: `Visa Expired: ${u.displayName || u.email}`, employee: u });
-        } else if (expiry < oneMonth) {
-          alerts.push({ priority: 'warning', msg: `Visa Expiring: ${u.displayName || u.email}`, employee: u });
-        }
-      }
-      
-      // Missing IBAN
-      if (!u.iban || !u.iban.startsWith('BH')) {
-        alerts.push({ priority: 'info', msg: `Missing IBAN: ${u.displayName || u.email}`, employee: u });
-      }
-    });
-    
-    return alerts.sort((a, b) => {
-      const order = { critical: 3, warning: 2, info: 1 };
-      return order[b.priority] - order[a.priority];
-    });
-  };
-  
+    if (!initialEmployeeUid || employees.length === 0) return;
+    const match = employees.find(e => e.id === initialEmployeeUid || e.uid === initialEmployeeUid);
+    if (match) {
+      setSelectedEmployee(match);
+      setActiveView('employee');
+    }
+  }, [initialEmployeeUid, employees]);
+
   // Stats calculations
   const stats = {
     total: employees.length,
@@ -443,18 +594,88 @@ export default function HRSystem({ user, userData }) {
     setSelectedEmployee(null);
     setActiveView('directory');
   };
-  
-  const handleRefresh = async () => {
-    setLoading(true);
-    // Re-trigger the useEffect by forcing a state update
-    setEmployees([]);
-    setTimeout(() => window.location.reload(), 100);
-  };
-  
-  // Quick approve handler
+
+  // The refresh button is now a no-op visually (data is live), but we keep
+  // the callback so the existing UI button doesn't break. Could remove the
+  // button in a future polish pass.
+  const handleRefresh = () => {};
+
+  // Mutations: writes only. The Firestore subscription pushes fresh data
+  // automatically, so no manual refetch is needed.
   const handleQuickApprove = async (userId) => {
-    // This would call the approval function
-    alert(`Approve user ${userId} - implement with updateDoc`);
+    if (!user?.uid) return;
+    try {
+      await updateDoc(doc(db, 'users', userId), {
+        status: 'approved',
+        approvedAt: serverTimestamp(),
+        isActive: true,
+        ...auditUpdate(user.uid),
+      });
+    } catch (err) {
+      console.error('Approve failed:', err);
+      alert('Failed to approve user: ' + err.message);
+    }
+  };
+
+  // Approve a leave request: mark approved AND decrement the user's balance.
+  // Mirrors AdminView.processLeaveRequest so behaviour is consistent.
+  const handleApproveLeave = async (request) => {
+    if (!user?.uid) return;
+    try {
+      await updateDoc(doc(db, 'leave_requests', request.id), {
+        status: 'approved',
+        processedAt: serverTimestamp(),
+        processedBy: user.uid,
+        ...auditUpdate(user.uid),
+      });
+
+      // Phase 2.7: debit the per-type balance. Falls back to annual for
+      // legacy requests without a leaveType field.
+      const userRef = doc(db, 'users', request.userId);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        const userDoc = userSnap.data();
+        const leaveType = request.leaveType || 'annual';
+        const days = request.daysRequested || 0;
+
+        // unpaid/study don't decrement (no fixed entitlement)
+        if (leaveType !== 'unpaid' && leaveType !== 'study') {
+          const currentBalances = resolveBalances(userDoc);
+          const newBalances = debitLeave(currentBalances, leaveType, days);
+
+          // Keep legacy fields in sync so older consumers don't drift.
+          const updates = {
+            leaveBalances: newBalances,
+            ...auditUpdate(user.uid),
+          };
+          if (leaveType === 'annual') {
+            updates.annualLeaveBalance = Math.max(0, newBalances.annual.entitled - newBalances.annual.used);
+          } else if (leaveType === 'sick') {
+            updates.sickDaysUsed = newBalances.sick.used;
+          }
+
+          await updateDoc(userRef, updates);
+        }
+      }
+    } catch (err) {
+      console.error('Leave approve failed:', err);
+      alert('Failed to approve leave: ' + err.message);
+    }
+  };
+
+  const handleRejectLeave = async (request) => {
+    if (!user?.uid) return;
+    try {
+      await updateDoc(doc(db, 'leave_requests', request.id), {
+        status: 'rejected',
+        processedAt: serverTimestamp(),
+        processedBy: user.uid,
+        ...auditUpdate(user.uid),
+      });
+    } catch (err) {
+      console.error('Leave reject failed:', err);
+      alert('Failed to reject leave: ' + err.message);
+    }
   };
   
   // Loading state
@@ -491,6 +712,15 @@ export default function HRSystem({ user, userData }) {
           >
             Staff Directory
           </button>
+          <ChevronRight size={16} className="text-slate-300" />
+          <button
+            onClick={() => setActiveView('reports')}
+            className={`px-3 py-1.5 rounded-lg transition-colors ${
+              activeView === 'reports' ? 'bg-indigo-100 text-indigo-700 font-medium' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Reports
+          </button>
           {activeView === 'employee' && selectedEmployee && (
             <>
               <ChevronRight size={16} className="text-slate-300" />
@@ -501,13 +731,23 @@ export default function HRSystem({ user, userData }) {
           )}
         </div>
         
-        <button
-          onClick={handleRefresh}
-          className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-          title="Refresh Data"
-        >
-          <RefreshCw size={18} />
-        </button>
+        <div className="flex items-center gap-2">
+          {can(actor, 'user.invite') && (
+            <button
+              onClick={() => setShowInviteModal(true)}
+              className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+            >
+              <UserPlus size={16} /> Invite Employee
+            </button>
+          )}
+          <button
+            onClick={handleRefresh}
+            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+            title="Refresh Data"
+          >
+            <RefreshCw size={18} />
+          </button>
+        </div>
       </div>
       
       {/* DASHBOARD VIEW */}
@@ -576,13 +816,15 @@ export default function HRSystem({ user, userData }) {
               
               <LeaveRequestsWidget
                 requests={leaveRequests}
-                onApprove={(req) => alert('Approve: ' + req.id)}
-                onReject={(req) => alert('Reject: ' + req.id)}
+                onApprove={handleApproveLeave}
+                onReject={handleRejectLeave}
               />
             </div>
             
             {/* Right Column - Analytics */}
             <div className="space-y-6">
+              <BirthdaysAnniversariesWidget employees={employees} />
+
               <NationalityBreakdown users={employees} />
               
               {/* Quick Actions */}
@@ -628,7 +870,12 @@ export default function HRSystem({ user, userData }) {
           onSelectEmployee={handleEmployeeSelect}
         />
       )}
-      
+
+      {/* REPORTS VIEW */}
+      {activeView === 'reports' && (
+        <HRReports employees={employees} />
+      )}
+
       {/* EMPLOYEE DETAIL VIEW */}
       {activeView === 'employee' && selectedEmployee && (
         <EmployeeDetailView
@@ -636,12 +883,15 @@ export default function HRSystem({ user, userData }) {
           onClose={handleBackToDirectory}
           user={user}
           userData={userData}
-          onUpdate={() => {
-            // Refresh employee data
-            window.location.reload();
-          }}
+          onUpdate={() => {/* live subscription auto-refreshes */}}
         />
       )}
+
+      <InviteEmployeeModal
+        isOpen={showInviteModal}
+        onClose={() => setShowInviteModal(false)}
+        userData={userData}
+      />
     </div>
   );
 }

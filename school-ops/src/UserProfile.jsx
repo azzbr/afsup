@@ -2,8 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { doc, updateDoc, getDoc, addDoc, collection } from 'firebase/firestore';
 import { db } from './firebase';
 import { uploadFile } from './storage';
-import { NATIONALITIES, BAHRAIN_BANKS, SICK_LEAVE_TIERS } from './constants';
-import { User, Calendar, CreditCard, Briefcase, Activity, AlertTriangle, Save, FileText, Eye, UploadCloud, Check } from 'lucide-react';
+import {
+  NATIONALITIES, BAHRAIN_BANKS, SICK_LEAVE_TIERS,
+  DEPARTMENTS, DEPARTMENT_LABELS,
+  CONTRACT_TYPES, CONTRACT_TYPE_LABELS,
+  MOE_APPROVAL_STATUSES, MOE_APPROVAL_LABELS,
+  SUBJECTS, GRADES, BLOOD_TYPES,
+  LEAVE_TYPES, LEAVE_TYPE_LABELS,
+} from './constants';
+import { resolveBalances, remainingDays } from './hr/leave';
+import {
+  User, Calendar, CreditCard, Briefcase, Activity, AlertTriangle, Save,
+  FileText, Eye, UploadCloud, Check, GraduationCap, Phone, Heart, Building2,
+} from 'lucide-react';
 
 export default function UserProfile({ userData, user }) {
   const [formData, setFormData] = useState({});
@@ -23,10 +34,11 @@ export default function UserProfile({ userData, user }) {
         firstName: userData.firstName || '',
         middleName: userData.middleName || '',
         lastName: userData.lastName || '',
-        arabicName: userData.arabicName || '', // NEW: For GOSI & Ministry contracts
+        arabicName: userData.arabicName || '',
         nationality: userData.nationality || 'Bahraini',
         gender: userData.gender || 'Male',
         maritalStatus: userData.maritalStatus || 'Single',
+        dateOfBirth: fmt(userData.dateOfBirth),
 
         // Documents
         cprNumber: userData.cprNumber || '',
@@ -34,7 +46,7 @@ export default function UserProfile({ userData, user }) {
         passportNumber: userData.passportNumber || '',
         passportExpiry: fmt(userData.passportExpiry),
 
-        // Visa (Only for Expats - this is the smart conditional logic!)
+        // Visa (Only for Expats)
         residencePermitNumber: userData.residencePermitNumber || '',
         residencePermitExpiry: fmt(userData.residencePermitExpiry),
         workPermitNumber: userData.workPermitNumber || '',
@@ -45,7 +57,7 @@ export default function UserProfile({ userData, user }) {
 
         // Employment & Leaves
         dateOfJoining: fmt(userData.dateOfJoining),
-        sickDaysUsed: userData.sickDaysUsed || 0, // Bahrain Labor Law tracking
+        sickDaysUsed: userData.sickDaysUsed || 0,
         annualLeaveBalance: userData.annualLeaveBalance || 30,
 
         // Financial & Payroll
@@ -55,7 +67,43 @@ export default function UserProfile({ userData, user }) {
         phoneAllowance: userData.phoneAllowance || '',
 
         // Contact
-        phoneNumber: userData.phoneNumber || ''
+        phoneNumber: userData.phoneNumber || '',
+
+        // ===== Phase 2.5 HR Domain Extension =====
+
+        // Employment (HR/admin typically maintains; user can view + suggest edits)
+        employeeNumber: userData.employeeNumber || '',
+        position: userData.position || '',
+        department: userData.department || '',
+        contractType: userData.contractType || '',
+        contractStartDate: fmt(userData.contractStartDate),
+        contractEndDate: fmt(userData.contractEndDate),
+        probationEndDate: fmt(userData.probationEndDate),
+
+        // Teacher-specific (only meaningful if isTeacher)
+        isTeacher: userData.isTeacher || false,
+        subjects: userData.subjects || [],
+        gradesTaught: userData.gradesTaught || [],
+        homeroomClass: userData.homeroomClass || '',
+        moeApprovalStatus: userData.moeApprovalStatus || 'not_required',
+        moeApprovalExpiry: fmt(userData.moeApprovalExpiry),
+        teachingLicenseNumber: userData.teachingLicenseNumber || '',
+        teachingLicenseExpiry: fmt(userData.teachingLicenseExpiry),
+        yearsExperienceTotal: userData.yearsExperienceTotal || '',
+        yearsAtAFS: userData.yearsAtAFS || '',
+
+        // Emergency contact
+        emergencyContactName: userData.emergencyContactName || '',
+        emergencyContactRelationship: userData.emergencyContactRelationship || '',
+        emergencyContactPhone: userData.emergencyContactPhone || '',
+        emergencyContactAltPhone: userData.emergencyContactAltPhone || '',
+
+        // Medical
+        bloodType: userData.bloodType || 'unknown',
+        allergies: userData.allergies || '',
+        medicalConditions: userData.medicalConditions || '',
+        insuranceProvider: userData.insuranceProvider || '',
+        insurancePolicyNumber: userData.insurancePolicyNumber || '',
       });
     }
   }, [userData]);
@@ -110,14 +158,25 @@ export default function UserProfile({ userData, user }) {
     }
 
     try {
+      const dateOrNull = (s) => (s ? new Date(s) : null);
       const updates = {
         ...formData,
         // Convert date strings back to Firestore Timestamps or null
-        cprExpiry: formData.cprExpiry ? new Date(formData.cprExpiry) : null,
-        passportExpiry: formData.passportExpiry ? new Date(formData.passportExpiry) : null,
-        residencePermitExpiry: formData.residencePermitExpiry ? new Date(formData.residencePermitExpiry) : null,
-        dateOfJoining: formData.dateOfJoining ? new Date(formData.dateOfJoining) : null,
-        updatedAt: new Date()
+        cprExpiry: dateOrNull(formData.cprExpiry),
+        passportExpiry: dateOrNull(formData.passportExpiry),
+        residencePermitExpiry: dateOrNull(formData.residencePermitExpiry),
+        dateOfJoining: dateOrNull(formData.dateOfJoining),
+        dateOfBirth: dateOrNull(formData.dateOfBirth),
+        contractStartDate: dateOrNull(formData.contractStartDate),
+        contractEndDate: dateOrNull(formData.contractEndDate),
+        probationEndDate: dateOrNull(formData.probationEndDate),
+        moeApprovalExpiry: dateOrNull(formData.moeApprovalExpiry),
+        teachingLicenseExpiry: dateOrNull(formData.teachingLicenseExpiry),
+        // Coerce numerics
+        yearsExperienceTotal: formData.yearsExperienceTotal ? Number(formData.yearsExperienceTotal) : null,
+        yearsAtAFS: formData.yearsAtAFS ? Number(formData.yearsAtAFS) : null,
+        updatedAt: new Date(),
+        updatedBy: user.uid,
       };
 
       // Clean up Expat fields if user switched to Bahraini (SMART LOGIC)
@@ -150,26 +209,32 @@ export default function UserProfile({ userData, user }) {
     }
 
     const daysRequested = parseInt(formData.leaveDays);
-    const balance = parseInt(formData.annualLeaveBalance || 0);
+    const leaveType = formData.leaveType || 'annual';
+    const isOpenEnded = leaveType === 'unpaid' || leaveType === 'study';
 
-    if (daysRequested > balance) {
-      alert(`You only have ${balance} days available.`);
-      setLoading(false);
-      return;
+    if (!isOpenEnded) {
+      const balances = resolveBalances(userData || {});
+      const remaining = remainingDays(balances[leaveType]);
+      if (daysRequested > remaining) {
+        alert(`You only have ${remaining} day(s) of ${leaveType} leave available.`);
+        setLoading(false);
+        return;
+      }
     }
 
     try {
-      // Create leave request in Firestore
+      // Create leave request in Firestore — Phase 2.7 includes leaveType
       await addDoc(collection(db, 'leave_requests'), {
         userId: user.uid,
         employeeName: `${formData.firstName} ${formData.lastName}`.trim(),
+        leaveType: formData.leaveType || 'annual',
         leaveStart: new Date(formData.leaveStart),
         leaveEnd: new Date(formData.leaveEnd),
         daysRequested,
         reason: formData.leaveReason || '',
-        status: 'pending', // pending, approved, rejected
+        status: 'pending',
         submittedAt: new Date(),
-        submittedBy: user.uid
+        submittedBy: user.uid,
       });
 
       // Clear form fields
@@ -321,6 +386,17 @@ export default function UserProfile({ userData, user }) {
                >
                  {NATIONALITIES.map(n => <option key={n} value={n}>{n}</option>)}
                </select>
+             </div>
+
+             <div>
+               <label className="block text-sm font-medium text-slate-700 mb-1">Date of Birth</label>
+               <input
+                 type="date"
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 value={formData.dateOfBirth || ''}
+                 onChange={e => setFormData({...formData, dateOfBirth: e.target.value})}
+               />
+               <p className="text-xs text-slate-400 mt-1">Used for birthday alerts on the HR dashboard.</p>
              </div>
 
              <div className="grid grid-cols-2 gap-2">
@@ -562,65 +638,121 @@ export default function UserProfile({ userData, user }) {
            )}
         </section>
 
-        {/* 6. ANNUAL LEAVE REQUEST - NEW */}
+        {/* 6. LEAVE REQUEST — Phase 2.7 multi-type */}
         <section className="space-y-4">
            <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
-             <Calendar size={20}/> Annual Leave Request
+             <Calendar size={20}/> Leave Request
            </h3>
-           <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
-             <div className="flex items-center justify-between mb-4">
-               <div>
-                 <h4 className="text-sm font-bold text-emerald-800">Available Leave Balance</h4>
-                 <p className="text-xs text-emerald-600">{formData.annualLeaveBalance || 0} days remaining</p>
-               </div>
-               <div className="text-2xl font-bold text-emerald-600">{formData.annualLeaveBalance || 0}</div>
-             </div>
 
-             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-               <div>
-                 <label className="block text-sm font-medium text-emerald-800 mb-1">From Date</label>
-                 <input
-                   type="date"
-                   className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
-                   value={(formData.leaveStart || '')}
-                   onChange={e => setFormData({...formData, leaveStart: e.target.value})}
-                 />
-               </div>
-               <div>
-                 <label className="block text-sm font-medium text-emerald-800 mb-1">To Date</label>
-                 <input
-                   type="date"
-                   className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
-                   value={(formData.leaveEnd || '')}
-                   onChange={e => setFormData({...formData, leaveEnd: e.target.value})}
-                 />
-               </div>
-               <div>
-                 <label className="block text-sm font-medium text-emerald-800 mb-1">Days Requested</label>
-                 <input
-                   type="number"
-                   min="1" max={formData.annualLeaveBalance || 0}
-                   className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
-                   placeholder="Number of days"
-                   value={(formData.leaveDays || '')}
-                   onChange={e => setFormData({...formData, leaveDays: e.target.value})}
-                 />
-               </div>
-             </div>
+           {/* Per-type balance cards */}
+           {(() => {
+             const balances = resolveBalances(userData || {});
+             const selectedType = formData.leaveType || 'annual';
+             const selectedBalance = balances[selectedType];
+             const remaining = remainingDays(selectedBalance);
+             const isOpenEnded = selectedType === 'unpaid' || selectedType === 'study';
 
-             <div className="mb-4">
-               <label className="block text-sm font-medium text-emerald-800 mb-1">Reason (Optional)</label>
-               <textarea
-                 rows="2"
-                 className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
-                 placeholder="Brief reason for leave..."
-                 value={(formData.leaveReason || '')}
-                 onChange={e => setFormData({...formData, leaveReason: e.target.value})}
-               />
-             </div>
+             return (
+               <>
+                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                   {LEAVE_TYPES.map(t => {
+                     const b = balances[t];
+                     const rem = remainingDays(b);
+                     const isSelected = selectedType === t;
+                     const openEnded = t === 'unpaid' || t === 'study';
+                     return (
+                       <button
+                         key={t}
+                         type="button"
+                         onClick={() => setFormData({...formData, leaveType: t})}
+                         className={`p-3 rounded-xl border text-left transition-all
+                           ${isSelected
+                             ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-100'
+                             : 'bg-white border-slate-200 hover:border-indigo-200'}`}
+                       >
+                         <p className="text-xs font-medium text-slate-600 truncate">{LEAVE_TYPE_LABELS[t]}</p>
+                         <p className="text-lg font-bold text-slate-900 mt-0.5">
+                           {openEnded ? '—' : `${rem}`}
+                           {!openEnded && <span className="text-xs font-normal text-slate-400 ml-1">/ {b.entitled}d</span>}
+                         </p>
+                         <p className="text-[10px] text-slate-400">
+                           {openEnded ? 'No cap' : `${b.used}d used`}
+                         </p>
+                       </button>
+                     );
+                   })}
+                 </div>
 
-             <p className="text-xs text-emerald-600">Request will be sent to HR for approval</p>
-           </div>
+                 <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
+                   <div className="flex items-center justify-between mb-4">
+                     <div>
+                       <h4 className="text-sm font-bold text-emerald-800">
+                         {LEAVE_TYPE_LABELS[selectedType]}
+                       </h4>
+                       <p className="text-xs text-emerald-600">
+                         {isOpenEnded
+                           ? 'No fixed cap — at HR/admin discretion.'
+                           : `${remaining} day${remaining === 1 ? '' : 's'} remaining (${selectedBalance.used} of ${selectedBalance.entitled} used).`}
+                       </p>
+                     </div>
+                     <div className="text-2xl font-bold text-emerald-600">
+                       {isOpenEnded ? '∞' : remaining}
+                     </div>
+                   </div>
+
+                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                     <div>
+                       <label className="block text-sm font-medium text-emerald-800 mb-1">From Date</label>
+                       <input
+                         type="date"
+                         className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
+                         value={(formData.leaveStart || '')}
+                         onChange={e => setFormData({...formData, leaveStart: e.target.value})}
+                       />
+                     </div>
+                     <div>
+                       <label className="block text-sm font-medium text-emerald-800 mb-1">To Date</label>
+                       <input
+                         type="date"
+                         className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
+                         value={(formData.leaveEnd || '')}
+                         onChange={e => setFormData({...formData, leaveEnd: e.target.value})}
+                       />
+                     </div>
+                     <div>
+                       <label className="block text-sm font-medium text-emerald-800 mb-1">Days Requested</label>
+                       <input
+                         type="number"
+                         min="1"
+                         max={isOpenEnded ? undefined : remaining}
+                         className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
+                         placeholder="Number of days"
+                         value={(formData.leaveDays || '')}
+                         onChange={e => setFormData({...formData, leaveDays: e.target.value})}
+                       />
+                     </div>
+                   </div>
+
+                   <div className="mb-4">
+                     <label className="block text-sm font-medium text-emerald-800 mb-1">
+                       Reason {selectedType === 'sick' || selectedType === 'bereavement' ? '(recommended)' : '(optional)'}
+                     </label>
+                     <textarea
+                       rows="2"
+                       className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
+                       placeholder="Brief reason for leave..."
+                       value={(formData.leaveReason || '')}
+                       onChange={e => setFormData({...formData, leaveReason: e.target.value})}
+                     />
+                   </div>
+
+                   <p className="text-xs text-emerald-600">
+                     Request will be sent to HR for approval. On approval, your balance is debited automatically.
+                   </p>
+                 </div>
+               </>
+             );
+           })()}
         </section>
 
         {/* 7. CONTACT & EMPLOYMENT */}
@@ -659,6 +791,342 @@ export default function UserProfile({ userData, user }) {
                <p className="text-xs text-slate-400 mt-1 text-center">Balance adjusted by HR upon leave approval</p>
              </div>
            </div>
+        </section>
+
+        {/* 8. EMPLOYMENT DETAILS (Phase 2.5) */}
+        <section className="space-y-4">
+          <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
+            <Building2 size={20}/> Employment Details
+          </h3>
+          <p className="text-xs text-slate-500 -mt-2">Maintained by HR. You can suggest edits — HR will confirm.</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Employee Number</label>
+              <input
+                type="text"
+                placeholder="e.g. AFS-0142"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.employeeNumber}
+                onChange={e => setFormData({...formData, employeeNumber: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Position</label>
+              <input
+                type="text"
+                placeholder="e.g. Math Teacher"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.position}
+                onChange={e => setFormData({...formData, position: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Department</label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                value={formData.department}
+                onChange={e => setFormData({...formData, department: e.target.value})}
+              >
+                <option value="">—</option>
+                {DEPARTMENTS.map(d => (
+                  <option key={d} value={d}>{DEPARTMENT_LABELS[d]}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Contract Type</label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                value={formData.contractType}
+                onChange={e => setFormData({...formData, contractType: e.target.value})}
+              >
+                <option value="">—</option>
+                {CONTRACT_TYPES.map(c => (
+                  <option key={c} value={c}>{CONTRACT_TYPE_LABELS[c]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Contract Start</label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.contractStartDate || ''}
+                onChange={e => setFormData({...formData, contractStartDate: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Contract End</label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.contractEndDate || ''}
+                onChange={e => setFormData({...formData, contractEndDate: e.target.value})}
+              />
+              <p className="text-xs text-slate-400 mt-1">For fixed-term contracts only.</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Probation End Date</label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.probationEndDate || ''}
+                onChange={e => setFormData({...formData, probationEndDate: e.target.value})}
+              />
+              <p className="text-xs text-slate-400 mt-1">HR will be reminded 30 days before this date.</p>
+            </div>
+            <div className="flex items-end pb-1">
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formData.isTeacher || false}
+                  onChange={e => setFormData({...formData, isTeacher: e.target.checked})}
+                  className="w-4 h-4 rounded border-slate-300"
+                />
+                I am a teaching staff member (shows teacher-specific fields below)
+              </label>
+            </div>
+          </div>
+        </section>
+
+        {/* 9. TEACHER INFO (Phase 2.5 — conditional) */}
+        {formData.isTeacher && (
+          <section className="space-y-4">
+            <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
+              <GraduationCap size={20}/> Teaching Credentials
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Subjects Taught</label>
+                <select
+                  multiple
+                  size={5}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                  value={formData.subjects || []}
+                  onChange={e => setFormData({
+                    ...formData,
+                    subjects: Array.from(e.target.selectedOptions, o => o.value),
+                  })}
+                >
+                  {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <p className="text-xs text-slate-400 mt-1">Hold Ctrl/Cmd to select multiple.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Grades Taught</label>
+                <select
+                  multiple
+                  size={5}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                  value={formData.gradesTaught || []}
+                  onChange={e => setFormData({
+                    ...formData,
+                    gradesTaught: Array.from(e.target.selectedOptions, o => o.value),
+                  })}
+                >
+                  {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Homeroom Class</label>
+                <input
+                  type="text"
+                  placeholder="e.g. G7A"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                  value={formData.homeroomClass}
+                  onChange={e => setFormData({...formData, homeroomClass: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Years Teaching (Total)</label>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                  value={formData.yearsExperienceTotal}
+                  onChange={e => setFormData({...formData, yearsExperienceTotal: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Years at Al Fajer</label>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                  value={formData.yearsAtAFS}
+                  onChange={e => setFormData({...formData, yearsAtAFS: e.target.value})}
+                />
+              </div>
+            </div>
+
+            <div className="bg-amber-50 p-4 rounded-xl border border-amber-100">
+              <p className="text-xs font-bold text-amber-800 uppercase mb-3">MOE Approval (required for teachers)</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
+                  <select
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                    value={formData.moeApprovalStatus}
+                    onChange={e => setFormData({...formData, moeApprovalStatus: e.target.value})}
+                  >
+                    {MOE_APPROVAL_STATUSES.map(s => (
+                      <option key={s} value={s}>{MOE_APPROVAL_LABELS[s]}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Approval Expiry</label>
+                  <input
+                    type="date"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                    value={formData.moeApprovalExpiry || ''}
+                    onChange={e => setFormData({...formData, moeApprovalExpiry: e.target.value})}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Teaching License Number</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                  value={formData.teachingLicenseNumber}
+                  onChange={e => setFormData({...formData, teachingLicenseNumber: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">License Expiry</label>
+                <input
+                  type="date"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                  value={formData.teachingLicenseExpiry || ''}
+                  onChange={e => setFormData({...formData, teachingLicenseExpiry: e.target.value})}
+                />
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* 10. EMERGENCY CONTACT (Phase 2.5) */}
+        <section className="space-y-4">
+          <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
+            <Phone size={20}/> Emergency Contact
+          </h3>
+          <p className="text-xs text-slate-500 -mt-2">Who should we call if something happens to you at work?</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Contact Name</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.emergencyContactName}
+                onChange={e => setFormData({...formData, emergencyContactName: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Relationship</label>
+              <input
+                type="text"
+                placeholder="e.g. Spouse, Parent, Sibling"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.emergencyContactRelationship}
+                onChange={e => setFormData({...formData, emergencyContactRelationship: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Primary Phone</label>
+              <input
+                type="tel"
+                placeholder="+973 0000 0000"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.emergencyContactPhone}
+                onChange={e => setFormData({...formData, emergencyContactPhone: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Alternate Phone</label>
+              <input
+                type="tel"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.emergencyContactAltPhone}
+                onChange={e => setFormData({...formData, emergencyContactAltPhone: e.target.value})}
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* 11. MEDICAL INFO (Phase 2.5) */}
+        <section className="space-y-4">
+          <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
+            <Heart size={20}/> Medical Information
+          </h3>
+          <p className="text-xs text-slate-500 -mt-2">Private — visible only to you, HR, and admin.</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Blood Type</label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                value={formData.bloodType}
+                onChange={e => setFormData({...formData, bloodType: e.target.value})}
+              >
+                {BLOOD_TYPES.map(b => <option key={b} value={b}>{b === 'unknown' ? 'Unknown' : b}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Insurance Provider</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.insuranceProvider}
+                onChange={e => setFormData({...formData, insuranceProvider: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Policy Number</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.insurancePolicyNumber}
+                onChange={e => setFormData({...formData, insurancePolicyNumber: e.target.value})}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Allergies</label>
+            <textarea
+              rows={2}
+              placeholder="e.g. Penicillin, peanuts. Leave blank if none."
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+              value={formData.allergies}
+              onChange={e => setFormData({...formData, allergies: e.target.value})}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Medical Conditions</label>
+            <textarea
+              rows={2}
+              placeholder="Any chronic conditions or medications first-responders should know about."
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+              value={formData.medicalConditions}
+              onChange={e => setFormData({...formData, medicalConditions: e.target.value})}
+            />
+          </div>
         </section>
 
         {/* Submit Leave Request */}

@@ -1,6 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { updateDoc, doc, serverTimestamp, collection, getDocs, deleteDoc, getDoc, query, where, orderBy } from 'firebase/firestore';
+import React, { useState, useMemo } from 'react';
+import { updateDoc, doc, serverTimestamp, deleteDoc, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
+import { actorFrom, can } from './permissions';
+import { resolveBalances, debitLeave } from './hr/leave';
+import { useUsers } from './data/useUsers';
+import { useScheduledTasks } from './data/useScheduledTasks';
+import { useLeaveRequests } from './data/useLeaveRequests';
 import {
   ShieldAlert, AlertTriangle, CheckCircle, Clock, Plus, ChevronDown,
   MapPin, User, FileText, Camera, X, Trash2, Pause, Play, RefreshCw,
@@ -137,8 +142,85 @@ function TicketDetailModal({ isOpen, onClose, ticket }) {
   );
 }
 
+// ============================================================================
+// HR COMPLIANCE ALERTS (pure — module-scope)
+//
+// Operates on users where Timestamp fields have already been normalized to
+// JS Dates by useUsers().convertUser.
+// ============================================================================
+
+function calculateHRAlerts(users) {
+  const now = new Date();
+  const threeMonthsFromNow = new Date(); threeMonthsFromNow.setMonth(now.getMonth() + 3);
+  const oneMonthFromNow = new Date(); oneMonthFromNow.setMonth(now.getMonth() + 1);
+
+  const alerts = [];
+
+  users.forEach(u => {
+    // 1. CPR Expiry Check
+    if (u.cprExpiry instanceof Date) {
+      if (u.cprExpiry < now) {
+        alerts.push({
+          type: 'expired', priority: 'critical',
+          msg: `CPR EXPIRED: ${u.displayName || u.email}`,
+          employee: u.displayName,
+          detail: 'Immediate action required - suspend access if needed',
+        });
+      } else if (u.cprExpiry < threeMonthsFromNow) {
+        alerts.push({
+          type: 'warning', priority: 'warning',
+          msg: `CPR Expiring Soon: ${u.displayName || u.email}`,
+          employee: u.displayName,
+          detail: `Expires: ${u.cprExpiry.toLocaleDateString()}`,
+        });
+      }
+    }
+
+    // 2. VISA Expiry Check (non-Bahraini only)
+    if (u.nationality !== 'Bahraini' && u.residencePermitExpiry instanceof Date) {
+      if (u.residencePermitExpiry < now) {
+        alerts.push({
+          type: 'expired', priority: 'critical',
+          msg: `VISA EXPIRED: ${u.displayName || u.email}`,
+          employee: u.displayName,
+          detail: 'LMRA violations possible - legal action needed',
+        });
+      } else if (u.residencePermitExpiry < oneMonthFromNow) {
+        alerts.push({
+          type: 'warning', priority: 'warning',
+          msg: `Visa Expiring: ${u.displayName || u.email}`,
+          employee: u.displayName,
+          detail: `RP expires: ${u.residencePermitExpiry.toLocaleDateString()}`,
+        });
+      }
+    }
+
+    // 3. Bank IBAN Missing/Incomplete
+    if (!u.iban || !u.iban.startsWith('BH')) {
+      alerts.push({
+        type: 'incomplete', priority: 'info',
+        msg: `Missing/Invalid IBAN: ${u.displayName || u.email}`,
+        employee: u.displayName,
+        detail: 'WPS compliance requires complete IBAN for salary payments',
+      });
+    }
+
+    // 4. Arabic Name Missing (GOSI Requirement)
+    if (!u.arabicName && u.nationality === 'Bahraini') {
+      alerts.push({
+        type: 'incomplete', priority: 'info',
+        msg: `Arabic Name Missing: ${u.displayName || u.email}`,
+        employee: u.displayName,
+        detail: 'Required for GOSI & official Ministry documents',
+      });
+    }
+  });
+
+  const priorityOrder = { critical: 3, warning: 2, info: 1 };
+  return alerts.sort((a, b) => priorityOrder[b.priority] - priorityOrder[a.priority]);
+}
+
 // --- Main Admin View Component ---
-// Note: This comment triggers a fresh deployment commit
 
 export default function AdminView({
   tickets = [],
@@ -149,170 +231,43 @@ export default function AdminView({
   initialTab
 }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'overview');
-  const [allUsers, setAllUsers] = useState([]);
-  const [allSchedules, setAllSchedules] = useState([]);
-  const [hrAlerts, setHrAlerts] = useState([]); // HR Compliance Alerts
-  const [pendingLeaveRequests, setPendingLeaveRequests] = useState([]); // Pending leave notifications
-  const [notificationBadges, setNotificationBadges] = useState({}); // Badge counts
   const [openDropdown, setOpenDropdown] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [detailTicket, setDetailTicket] = useState(null);
   const [showDocModal, setShowDocModal] = useState(false);
   const [selectedUserDocs, setSelectedUserDocs] = useState({});
   const [selectedUserName, setSelectedUserName] = useState('');
+  const [actionLoading, setActionLoading] = useState(null); // uid of user being updated
 
-  // New state for loading feedback
-  const [actionLoading, setActionLoading] = useState(null); // Stores the ID of the user being updated
-  
-  // NEW: Filter & Enhancement States
-  const [ticketFilter, setTicketFilter] = useState('all'); // 'all', 'critical', 'open', 'in_progress', 'resolved'
-  const [selectedTickets, setSelectedTickets] = useState([]); // For batch actions
-  const [quickNote, setQuickNote] = useState({}); // { ticketId: 'note text' }
+  // Filter + batch action state
+  const [ticketFilter, setTicketFilter] = useState('all');
+  const [selectedTickets, setSelectedTickets] = useState([]);
+  const [quickNote, setQuickNote] = useState({});
 
-  useEffect(() => { fetchData(); }, [user, userData]);
+  // Live data — subscriptions auto-update after mutations.
+  const actor = actorFrom(userData);
+  const { data: allUsers = [] } = useUsers(Boolean(userData));
+  const { data: allSchedules = [] } = useScheduledTasks(Boolean(userData));
+  const { data: pendingLeaveRequests = [] } = useLeaveRequests(actor, 'pending');
 
-  // 1. FILTER LOGIC: Who can see whom?
-  const getVisibleUsers = () => {
-    if (!userData || !allUsers) return [];
+  // Filter users via the permissions module. Add `id` alias for legacy UI.
+  const visibleUsers = useMemo(() => {
+    return allUsers
+      .filter(u => can(actor, 'user.view.profile', {
+        type: 'user',
+        data: { uid: u.uid, role: u.role || 'staff' },
+      }))
+      .map(u => ({ ...u, id: u.uid }));
+  }, [allUsers, actor]);
 
-    const myRole = userData.role;
+  const hrAlerts = useMemo(() => calculateHRAlerts(visibleUsers), [visibleUsers]);
 
-    return allUsers.filter(targetUser => {
-      const targetRole = targetUser.role || 'staff';
+  // Mutations only need to read this once. Kept for back-compat with UI checks.
+  const canManageUsers = can(actor, 'user.invite');
 
-      // ADMIN: Sees everyone
-      if (myRole === 'admin') return true;
-
-      // HR: Sees Staff, Maintenance, and HR. CANNOT SEE ADMIN.
-      if (myRole === 'hr') {
-        return ['staff', 'maintenance', 'hr'].includes(targetRole);
-      }
-
-      // MAINTENANCE: Sees Staff and Maintenance. Cannot see HR or Admin.
-      if (myRole === 'maintenance') {
-        return ['staff', 'maintenance'].includes(targetRole);
-      }
-
-      // STAFF: Sees only Staff (but this will rarely be called since they won't have access to this view)
-      if (myRole === 'staff') {
-        return targetRole === 'staff';
-      }
-
-      return false;
-    });
-  };
-
-  const visibleUsers = getVisibleUsers();
-
-  // 2. PERMISSION LOGIC: Who can edit/view docs?
-  // Only Admin and HR can see the "Actions" column (Edit, Docs, Delete)
-  const canManageUsers = ['admin', 'hr'].includes(userData?.role);
-
-  // --- HR ALERTS CALCULATION: Bahrain Compliance Monitoring ---
-  const calculateHRAlerts = (users) => {
-    const now = new Date();
-    const threeMonthsFromNow = new Date(); threeMonthsFromNow.setMonth(now.getMonth() + 3);
-    const oneMonthFromNow = new Date(); oneMonthFromNow.setMonth(now.getMonth() + 1);
-
-    const alerts = [];
-
-    users.forEach(u => {
-      // 1. CPR Expiry Check (Critical for all Bahrain residents)
-      if (u.cprExpiry && u.cprExpiry.toDate) {
-         const expiry = u.cprExpiry.toDate();
-         if (expiry < now) {
-           alerts.push({
-             type: 'expired',
-             priority: 'critical',
-             msg: `❌ CPR EXPIRED: ${u.displayName || u.email}`,
-             employee: u.displayName,
-             detail: 'Immediate action required - suspend access if needed'
-           });
-         } else if (expiry < threeMonthsFromNow) {
-           alerts.push({
-             type: 'warning',
-             priority: 'warning',
-             msg: `⚠️ CPR Expiring Soon: ${u.displayName || u.email}`,
-             employee: u.displayName,
-             detail: `Expires: ${expiry.toLocaleDateString()}`
-           });
-         }
-      }
-
-      // 2. VISA Expiry Check (Only for Non-Bahrainis - LMRA Critical)
-      if (u.nationality !== 'Bahraini' && u.residencePermitExpiry && u.residencePermitExpiry.toDate) {
-         const expiry = u.residencePermitExpiry.toDate();
-         if (expiry < now) {
-           alerts.push({
-             type: 'expired',
-             priority: 'critical',
-             msg: `🚨 VISA EXPIRED: ${u.displayName || u.email}`,
-             employee: u.displayName,
-             detail: 'LMRA violations possible - legal action needed'
-           });
-         } else if (expiry < oneMonthFromNow) {
-           alerts.push({
-             type: 'warning',
-             priority: 'warning',
-             msg: `⚠️ Visa Expiring: ${u.displayName || u.email}`,
-             employee: u.displayName,
-             detail: `RP expires: ${expiry.toLocaleDateString()}`
-           });
-         }
-      }
-
-      // 3. Bank IBAN Missing/Incomplete
-      if (!u.iban || !u.iban.startsWith('BH')) {
-        alerts.push({
-          type: 'incomplete',
-          priority: 'info',
-          msg: `📝 Missing/Invalid IBAN: ${u.displayName || u.email}`,
-          employee: u.displayName,
-          detail: 'WPS compliance requires complete IBAN for salary payments'
-        });
-      }
-
-      // 4. Arabic Name Missing (GOSI Requirement)
-      if (!u.arabicName && u.nationality === 'Bahraini') {
-        alerts.push({
-          type: 'incomplete',
-          priority: 'info',
-          msg: `📝 Arabic Name Missing: ${u.displayName || u.email}`,
-          employee: u.displayName,
-          detail: 'Required for GOSI & official Ministry documents'
-        });
-      }
-    });
-
-    // Sort by priority (critical first, then warnings, then info)
-    return alerts.sort((a, b) => {
-      const priorityOrder = { critical: 3, warning: 2, info: 1 };
-      return priorityOrder[b.priority] - priorityOrder[a.priority];
-    });
-  };
-
-  const fetchData = async () => {
-    try {
-      const usersDocs = await getDocs(collection(db, 'users'));
-      const users = usersDocs.docs.map(d => ({ id: d.id, ...d.data() }));
-      setAllUsers(users);
-
-      // Calculate and set HR alerts
-      const alerts = calculateHRAlerts(users);
-      setHrAlerts(alerts);
-
-      // Load pending leave requests
-      const leaveQuery = query(collection(db, 'leave_requests'),
-                               where('status', '==', 'pending'),
-                               orderBy('submittedAt', 'desc'));
-      const leaveDocs = await getDocs(leaveQuery);
-      const leaveRequests = leaveDocs.docs.map(d => ({ id: d.id, ...d.data() }));
-      setPendingLeaveRequests(leaveRequests);
-
-      const schedulesDocs = await getDocs(collection(db, 'scheduled_tasks'));
-      setAllSchedules(schedulesDocs.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch (e) { console.error("Fetch error:", e); }
-  };
+  // No-op fetchData — kept to minimize churn in mutation handlers below.
+  // Subscriptions push fresh data automatically.
+  const fetchData = () => {};
 
   const ticketStats = tickets.reduce((a, t) => {
     if (t.priority === 'critical' && t.status !== 'resolved') a.critical++;
@@ -522,19 +477,28 @@ export default function AdminView({
         processedBy: user.uid
       });
 
-      // 3. If approved, deduct from annual leave balance
+      // 3. If approved, debit the per-type balance (Phase 2.7).
+      //    Falls back to "annual" for legacy requests with no leaveType.
       if (status === 'approved') {
+        const leaveType = request.leaveType || 'annual';
+        const days = request.daysRequested || 0;
         const userRef = doc(db, 'users', request.userId);
         const userDoc = await getDoc(userRef);
 
-        if (userDoc.exists()) {
-          const currentBalance = userDoc.data().annualLeaveBalance || 0;
-          const newBalance = Math.max(0, currentBalance - request.daysRequested);
-
-          await updateDoc(userRef, {
-            annualLeaveBalance: newBalance,
-            updatedAt: serverTimestamp()
-          });
+        if (userDoc.exists() && leaveType !== 'unpaid' && leaveType !== 'study') {
+          const currentBalances = resolveBalances(userDoc.data());
+          const newBalances = debitLeave(currentBalances, leaveType, days);
+          const updates = {
+            leaveBalances: newBalances,
+            updatedAt: serverTimestamp(),
+            updatedBy: user.uid,
+          };
+          if (leaveType === 'annual') {
+            updates.annualLeaveBalance = Math.max(0, newBalances.annual.entitled - newBalances.annual.used);
+          } else if (leaveType === 'sick') {
+            updates.sickDaysUsed = newBalances.sick.used;
+          }
+          await updateDoc(userRef, updates);
         }
       }
 
@@ -949,9 +913,25 @@ export default function AdminView({
                     {!s.isActive && <span className="px-2 py-0.5 bg-slate-200 text-slate-600 text-[10px] font-bold rounded uppercase">Paused</span>}
                   </div>
                   <p className="text-sm text-slate-600 mb-2">{s.description}</p>
-                  <div className="flex gap-4 text-xs text-slate-400">
+                  <div className="flex flex-wrap gap-4 text-xs text-slate-400">
                     <span className="flex items-center gap-1"><RefreshCw size={12}/> Every {s.frequencyDays} days</span>
                     <span className="flex items-center gap-1"><MapPin size={12}/> {s.locations?.length} locations</span>
+                    {(() => {
+                      const last = s.lastRun instanceof Date ? s.lastRun : s.lastRun?.toDate?.();
+                      const next = s.nextRun instanceof Date ? s.nextRun : s.nextRun?.toDate?.();
+                      return (
+                        <>
+                          <span className="flex items-center gap-1" title={last?.toLocaleString() || 'Never run'}>
+                            <Clock size={12}/> Last: {last ? last.toLocaleDateString() : 'never'}
+                          </span>
+                          {s.isActive && (
+                            <span className="flex items-center gap-1 text-indigo-600" title={next?.toLocaleString() || 'Pending first run'}>
+                              <Clock size={12}/> Next: {next ? next.toLocaleDateString() : 'pending'}
+                            </span>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
                 <div className="flex gap-2">

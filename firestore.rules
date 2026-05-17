@@ -103,5 +103,47 @@ service cloud.firestore {
       // DELETE: Admins only
       allow delete: if isAdmin();
     }
+
+    // 5. Invitations Collection (Phase 2 — invitation-based onboarding)
+    //
+    // Tokens here are unguessable (32 random bytes, hex-encoded) and short-
+    // lived (7 days). All writes go through Cloud Functions running as admin
+    // (which bypass these rules), so the client never writes here.
+    //
+    // The /accept-invite React page reads the invitation by its token to
+    // show the right email/role on screen before submitting the password.
+    // Anyone with the token (i.e. the legitimate invitee) can read; nobody
+    // else can list the collection because token IDs are unguessable.
+    match /invitations/{token} {
+      allow read: if true;
+      allow write: if false; // Cloud Functions only.
+    }
+
+    // 6. Audit Log (Phase 1/2 — append-only history)
+    //
+    // Written exclusively by Cloud Functions. HR and admins may read for
+    // forensic review. No one may update or delete.
+    match /audit_log/{entry} {
+      allow read: if isAdmin() || (isVerifiedUser() && getUserRole() == 'hr');
+      allow write: if false; // Cloud Functions only.
+    }
+
+    // 7. Notifications (Phase 2 placeholder — used by Phase 4 too)
+    //
+    // Written by Cloud Functions. Each notification targets a specific uid
+    // or a role broadcast key (e.g. "role:hr"). Users read their own + any
+    // broadcasts matching their role.
+    match /notifications/{notification} {
+      allow read: if isAuthenticated() && (
+        resource.data.targetUid == request.auth.uid ||
+        resource.data.targetUid == 'role:' + getUserRole() ||
+        isAdmin()
+      );
+      // Users may mark their own notifications as read by patching readAt.
+      allow update: if isAuthenticated() &&
+                    resource.data.targetUid == request.auth.uid &&
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
+      allow create, delete: if false; // Cloud Functions only.
+    }
   }
 }

@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import React, { useState, useMemo } from 'react';
 import { NATIONALITIES, BAHRAIN_BANKS } from '../constants';
+import { actorFrom, can } from '../permissions';
+import { useUsers } from '../data/useUsers';
 import {
   Search, Filter, Users, User, Mail, Phone, MapPin, Building2,
   Calendar, CreditCard, FileText, Shield, ChevronRight, ChevronDown,
@@ -397,8 +397,6 @@ const FilterSidebar = ({ filters, setFilters, employees }) => {
 // ============================================================================
 
 export default function HRDirectory({ user, userData, onSelectEmployee }) {
-  const [employees, setEmployees] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'table'
   const [selectedEmployee, setSelectedEmployee] = useState(null);
@@ -408,41 +406,22 @@ export default function HRDirectory({ user, userData, onSelectEmployee }) {
     role: 'all',
     status: 'all',
     nationality: 'all',
-    complianceOnly: false
+    complianceOnly: false,
   });
-  
-  // Permission check
-  const canManageUsers = ['admin', 'hr'].includes(userData?.role);
-  
-  // Load employees
-  useEffect(() => {
-    const loadEmployees = async () => {
-      setLoading(true);
-      try {
-        const snapshot = await getDocs(collection(db, 'users'));
-        const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        
-        // Filter based on current user's role permissions
-        const filtered = data.filter(emp => {
-          const myRole = userData?.role;
-          const targetRole = emp.role || 'staff';
-          
-          if (myRole === 'admin') return true;
-          if (myRole === 'hr') return ['staff', 'maintenance', 'hr'].includes(targetRole);
-          if (myRole === 'maintenance') return ['staff', 'maintenance'].includes(targetRole);
-          return targetRole === 'staff';
-        });
-        
-        setEmployees(filtered);
-      } catch (error) {
-        console.error('Error loading employees:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    if (userData) loadEmployees();
-  }, [userData]);
+
+  const actor = actorFrom(userData);
+  const canManageUsers = can(actor, 'user.invite');
+
+  // Real-time users subscription, filtered by what this actor can see.
+  const { data: allUsers = [], isLoading: loading } = useUsers(Boolean(userData));
+  const employees = useMemo(() => {
+    return allUsers
+      .filter(u => can(actor, 'user.view.profile', {
+        type: 'user',
+        data: { uid: u.uid, role: u.role || 'staff' },
+      }))
+      .map(u => ({ ...u, id: u.uid }));
+  }, [allUsers, actor]);
   
   // Filter and search employees
   const filteredEmployees = useMemo(() => {
