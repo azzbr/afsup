@@ -92,7 +92,7 @@ export default function UserProfile({ userData, user }) {
         yearsExperienceTotal: userData.yearsExperienceTotal || '',
         yearsAtAFS: userData.yearsAtAFS || '',
 
-        // Emergency contact
+        // Emergency contact (local / primary)
         emergencyContactName: userData.emergencyContactName || '',
         emergencyContactRelationship: userData.emergencyContactRelationship || '',
         emergencyContactPhone: userData.emergencyContactPhone || '',
@@ -102,8 +102,40 @@ export default function UserProfile({ userData, user }) {
         bloodType: userData.bloodType || 'unknown',
         allergies: userData.allergies || '',
         medicalConditions: userData.medicalConditions || '',
+        healthIssues: userData.healthIssues || '',
         insuranceProvider: userData.insuranceProvider || '',
         insurancePolicyNumber: userData.insurancePolicyNumber || '',
+
+        // Extended identity
+        personalEmail: userData.personalEmail || '',
+        fatherName: userData.fatherName || '',
+        religion: userData.religion || '',
+        secondaryPhone: userData.secondaryPhone || '',
+
+        // Bahrain address
+        bahrainAddressHouse: userData.bahrainAddressHouse || '',
+        bahrainAddressFlat: userData.bahrainAddressFlat || '',
+        bahrainAddressRoad: userData.bahrainAddressRoad || '',
+        bahrainAddressBlock: userData.bahrainAddressBlock || '',
+        bahrainAddressArea: userData.bahrainAddressArea || '',
+
+        // Home country (non-Bahraini)
+        homeCountryAddress: userData.homeCountryAddress || '',
+        homeCountryEmergency1Name: userData.homeCountryEmergency1Name || '',
+        homeCountryEmergency1Phone: userData.homeCountryEmergency1Phone || '',
+        homeCountryEmergency1Relationship: userData.homeCountryEmergency1Relationship || '',
+        homeCountryEmergency2Name: userData.homeCountryEmergency2Name || '',
+        homeCountryEmergency2Phone: userData.homeCountryEmergency2Phone || '',
+        homeCountryEmergency2Relationship: userData.homeCountryEmergency2Relationship || '',
+
+        // Family
+        spouseName: userData.spouseName || '',
+        spouseCprNumber: userData.spouseCprNumber || '',
+        spouseJobTitle: userData.spouseJobTitle || '',
+        spouseCompanyName: userData.spouseCompanyName || '',
+        spouseCompanyLocation: userData.spouseCompanyLocation || '',
+        childrenInfo: userData.childrenInfo || '',
+        childrenCprNumbers: userData.childrenCprNumbers || '',
       });
     }
   }, [userData]);
@@ -339,7 +371,9 @@ export default function UserProfile({ userData, user }) {
            </h3>
            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
              <div className="space-y-2">
-               <label className="block text-sm font-medium text-slate-700">Full Name (English) *</label>
+               <label className="block text-sm font-medium text-slate-700">
+                 Full Name in English (as written in CPR) *
+               </label>
                <div className="grid grid-cols-3 gap-2">
                  <input
                    type="text" required
@@ -374,7 +408,63 @@ export default function UserProfile({ userData, user }) {
                  value={formData.arabicName}
                  onChange={e => setFormData({...formData, arabicName: e.target.value})}
                />
-               <p className="text-xs text-slate-400 mt-1">Required for GOSI & official Ministry contracts</p>
+               <p className="text-xs text-slate-400 mt-1">Required for GOSI &amp; official Ministry contracts</p>
+             </div>
+
+             <div>
+               <label className="block text-sm font-medium text-slate-700 mb-1">
+                 Father&apos;s Name (as written in CPR)
+               </label>
+               <input
+                 type="text"
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 value={formData.fatherName}
+                 onChange={e => setFormData({...formData, fatherName: e.target.value})}
+               />
+             </div>
+
+             <div>
+               <label className="block text-sm font-medium text-slate-700 mb-1">Religion</label>
+               <input
+                 type="text"
+                 placeholder="e.g. Muslim, Christian, …"
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 value={formData.religion}
+                 onChange={e => setFormData({...formData, religion: e.target.value})}
+               />
+             </div>
+
+             <div>
+               <label className="block text-sm font-medium text-slate-700 mb-1">Official School Email</label>
+               <input
+                 type="email"
+                 readOnly
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 cursor-not-allowed text-slate-500"
+                 value={userData?.email || ''}
+               />
+               <p className="text-xs text-slate-400 mt-1">Tied to your login account; ask HR to change.</p>
+             </div>
+
+             <div>
+               <label className="block text-sm font-medium text-slate-700 mb-1">Personal Email</label>
+               <input
+                 type="email"
+                 placeholder="your-personal@example.com"
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 value={formData.personalEmail}
+                 onChange={e => setFormData({...formData, personalEmail: e.target.value})}
+               />
+             </div>
+
+             <div>
+               <label className="block text-sm font-medium text-slate-700 mb-1">Secondary Phone Number</label>
+               <input
+                 type="tel"
+                 placeholder="+973 0000 0000"
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 value={formData.secondaryPhone}
+                 onChange={e => setFormData({...formData, secondaryPhone: e.target.value})}
+               />
              </div>
 
              <div>
@@ -793,6 +883,159 @@ export default function UserProfile({ userData, user }) {
            </div>
         </section>
 
+        {/* 7b. ADDRESSES — Bahrain (always) + Home Country (non-Bahrainis only) */}
+        <section className="space-y-4">
+          <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
+            <Building2 size={20}/> Address in Bahrain
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">House / Building No.</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.bahrainAddressHouse}
+                onChange={e => setFormData({...formData, bahrainAddressHouse: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Flat No.</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.bahrainAddressFlat}
+                onChange={e => setFormData({...formData, bahrainAddressFlat: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Road No.</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.bahrainAddressRoad}
+                onChange={e => setFormData({...formData, bahrainAddressRoad: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Block No.</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.bahrainAddressBlock}
+                onChange={e => setFormData({...formData, bahrainAddressBlock: e.target.value})}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Area Name</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.bahrainAddressArea}
+                onChange={e => setFormData({...formData, bahrainAddressArea: e.target.value})}
+              />
+            </div>
+          </div>
+
+          {!isBahraini && (
+            <>
+              <div className="border-t border-slate-100 pt-4 mt-2">
+                <h4 className="text-base font-semibold text-slate-700 mb-2">
+                  Home Country Address
+                </h4>
+                <p className="text-xs text-slate-500 mb-3">
+                  Address in your country of origin — house/building/road/block/area as relevant.
+                </p>
+                <textarea
+                  rows={3}
+                  placeholder="Full address in your home country"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                  value={formData.homeCountryAddress}
+                  onChange={e => setFormData({...formData, homeCountryAddress: e.target.value})}
+                />
+              </div>
+
+              <div className="border-t border-slate-100 pt-4">
+                <h4 className="text-base font-semibold text-slate-700 mb-1">
+                  Home Country Emergency Contact 1
+                </h4>
+                <p className="text-xs text-slate-500 mb-3">Relative or friend who can be reached in your home country.</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                      value={formData.homeCountryEmergency1Name}
+                      onChange={e => setFormData({...formData, homeCountryEmergency1Name: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Phone No.</label>
+                    <input
+                      type="tel"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                      value={formData.homeCountryEmergency1Phone}
+                      onChange={e => setFormData({...formData, homeCountryEmergency1Phone: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Relationship</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Brother, Mother"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                      value={formData.homeCountryEmergency1Relationship}
+                      onChange={e => setFormData({...formData, homeCountryEmergency1Relationship: e.target.value})}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-4">
+                <h4 className="text-base font-semibold text-slate-700 mb-1">
+                  Home Country Emergency Contact 2
+                </h4>
+                <p className="text-xs text-slate-500 mb-3">A second contact in your home country.</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                      value={formData.homeCountryEmergency2Name}
+                      onChange={e => setFormData({...formData, homeCountryEmergency2Name: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Phone No.</label>
+                    <input
+                      type="tel"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                      value={formData.homeCountryEmergency2Phone}
+                      onChange={e => setFormData({...formData, homeCountryEmergency2Phone: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Relationship</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                      value={formData.homeCountryEmergency2Relationship}
+                      onChange={e => setFormData({...formData, homeCountryEmergency2Relationship: e.target.value})}
+                    />
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {isBahraini && (
+            <p className="text-xs text-slate-400 italic">
+              Home country fields are hidden because you&apos;ve set your nationality to Bahraini.
+            </p>
+          )}
+        </section>
+
         {/* 8. EMPLOYMENT DETAILS (Phase 2.5) */}
         <section className="space-y-4">
           <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
@@ -1069,6 +1312,100 @@ export default function UserProfile({ userData, user }) {
           </div>
         </section>
 
+        {/* 10b. FAMILY — spouse + children (all optional) */}
+        <section className="space-y-4">
+          <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
+            <User size={20}/> Family Details
+          </h3>
+          <p className="text-xs text-slate-500 -mt-2">Fill in only what applies to you.</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Spouse Name (if applicable)
+              </label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.spouseName}
+                onChange={e => setFormData({...formData, spouseName: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Spouse CPR Number (if applicable)
+              </label>
+              <input
+                type="text"
+                maxLength="9"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.spouseCprNumber}
+                onChange={e => setFormData({...formData, spouseCprNumber: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Spouse Job Title (if applicable)
+              </label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.spouseJobTitle}
+                onChange={e => setFormData({...formData, spouseJobTitle: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Spouse Company Name (if applicable)
+              </label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.spouseCompanyName}
+                onChange={e => setFormData({...formData, spouseCompanyName: e.target.value})}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Spouse Company Location (if applicable)
+              </label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                value={formData.spouseCompanyLocation}
+                onChange={e => setFormData({...formData, spouseCompanyLocation: e.target.value})}
+              />
+            </div>
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Children — names &amp; ages (if applicable)
+            </label>
+            <textarea
+              rows={2}
+              placeholder="e.g. Sara (8, in Bahrain), Omar (5, with grandparents in Egypt)"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+              value={formData.childrenInfo}
+              onChange={e => setFormData({...formData, childrenInfo: e.target.value})}
+            />
+            <p className="text-xs text-slate-400 mt-1">Indicate which children are in Bahrain vs elsewhere.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Children CPR Numbers (if in Bahrain)
+            </label>
+            <textarea
+              rows={2}
+              placeholder="One per line, or comma-separated"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+              value={formData.childrenCprNumbers}
+              onChange={e => setFormData({...formData, childrenCprNumbers: e.target.value})}
+            />
+          </div>
+        </section>
+
         {/* 11. MEDICAL INFO (Phase 2.5) */}
         <section className="space-y-4">
           <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
@@ -1125,6 +1462,16 @@ export default function UserProfile({ userData, user }) {
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
               value={formData.medicalConditions}
               onChange={e => setFormData({...formData, medicalConditions: e.target.value})}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Health Issues (if applicable)</label>
+            <textarea
+              rows={2}
+              placeholder="Any other health concerns HR should know about. Leave blank if none."
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+              value={formData.healthIssues}
+              onChange={e => setFormData({...formData, healthIssues: e.target.value})}
             />
           </div>
         </section>
@@ -1276,21 +1623,38 @@ const DocumentVault = ({ user }) => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Identity Docs */}
         <DocumentUpload
-          label="Passport Copy" docType="passport"
-          userId={user?.uid} currentUrl={documents.passport} onUpload={handleDocUpload}
+          label="CPR — Front Side" docType="cpr_front"
+          userId={user?.uid} currentUrl={documents.cpr_front} onUpload={handleDocUpload}
         />
         <DocumentUpload
-          label="CPR (Smart Card)" docType="cpr"
+          label="CPR — Back Side" docType="cpr_back"
+          userId={user?.uid} currentUrl={documents.cpr_back} onUpload={handleDocUpload}
+        />
+        <DocumentUpload
+          label="CPR (Smart Card — legacy single upload)" docType="cpr"
           userId={user?.uid} currentUrl={documents.cpr} onUpload={handleDocUpload}
+        />
+        <DocumentUpload
+          label="Passport Copy" docType="passport"
+          userId={user?.uid} currentUrl={documents.passport} onUpload={handleDocUpload}
         />
         <DocumentUpload
           label="IBAN Certificate" docType="iban"
           userId={user?.uid} currentUrl={documents.iban} onUpload={handleDocUpload}
         />
 
+        {/* CV */}
+        <div className="col-span-1 md:col-span-2 mt-4 mb-2">
+          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">CV / Resume</h4>
+        </div>
+        <DocumentUpload
+          label="Curriculum Vitae (CV)" docType="cv"
+          userId={user?.uid} currentUrl={documents.cv} onUpload={handleDocUpload}
+        />
+
         {/* Education & Verification Docs */}
         <div className="col-span-1 md:col-span-2 mt-4 mb-2">
-          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Education & Verification</h4>
+          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Education &amp; Verification</h4>
         </div>
 
         <DocumentUpload

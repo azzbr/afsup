@@ -121,7 +121,7 @@ export interface User extends Partial<AuditFields> {
   yearsExperienceTotal?: number;
   yearsAtAFS?: number;
 
-  // Emergency contact
+  // Emergency contact (local / primary)
   emergencyContactName?: string;
   emergencyContactRelationship?: string;
   emergencyContactPhone?: string;
@@ -131,8 +131,51 @@ export interface User extends Partial<AuditFields> {
   bloodType?: BloodType;
   allergies?: string;
   medicalConditions?: string;
+  healthIssues?: string;
   insuranceProvider?: string;
   insurancePolicyNumber?: string;
+
+  // ============================================================================
+  // EXPANDED EMPLOYEE INFO (HR data collection form)
+  // All optional. Self-editable. Home-country fields only meaningful for
+  // non-Bahrainis; UI hides them otherwise instead of asking for "N/A".
+  // ============================================================================
+
+  // Extended identity
+  personalEmail?: string;          // distinct from the official school email
+  fatherName?: string;             // as written in CPR
+  religion?: string;
+  secondaryPhone?: string;         // "Phone Number (2)"
+
+  // Bahrain address — structured (Bahrain addressing model)
+  bahrainAddressHouse?: string;
+  bahrainAddressFlat?: string;
+  bahrainAddressRoad?: string;
+  bahrainAddressBlock?: string;
+  bahrainAddressArea?: string;
+
+  // Home country address — free text (varies wildly by country)
+  homeCountryAddress?: string;
+
+  // Two home-country emergency contacts (non-Bahrainis)
+  homeCountryEmergency1Name?: string;
+  homeCountryEmergency1Phone?: string;
+  homeCountryEmergency1Relationship?: string;
+
+  homeCountryEmergency2Name?: string;
+  homeCountryEmergency2Phone?: string;
+  homeCountryEmergency2Relationship?: string;
+
+  // Family
+  spouseName?: string;
+  spouseCprNumber?: string;
+  spouseJobTitle?: string;
+  spouseCompanyName?: string;
+  spouseCompanyLocation?: string;
+  /** Free text — e.g. "Sara (8, in Bahrain), Omar (5, with grandparents)" */
+  childrenInfo?: string;
+  /** Free text — list of CPRs */
+  childrenCprNumbers?: string;
 }
 
 // ============================================================================
