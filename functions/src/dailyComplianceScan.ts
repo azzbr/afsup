@@ -14,7 +14,7 @@ import { logger } from "firebase-functions/v2";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { db } from "./admin";
-import { sendInviteEmail, SENDGRID_API_KEY } from "./email";
+import { sendInviteEmail, RESEND_API_KEY } from "./email";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -204,7 +204,7 @@ export const dailyComplianceScan = onSchedule(
     schedule: "every day 02:00",
     region: "us-central1",
     timeZone: "Asia/Bahrain",
-    secrets: [SENDGRID_API_KEY],
+    secrets: [RESEND_API_KEY],
   },
   async () => {
     const now = new Date();

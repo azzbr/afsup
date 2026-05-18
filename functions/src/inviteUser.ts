@@ -10,7 +10,7 @@
 //   4. Generate a single-use invitation token, store it in /invitations/{token}.
 //   5. Compose the invite URL pointing at the React /accept-invite route.
 //   6. Optionally email the URL via SendGrid (falls back to returning the URL
-//      in the response if SENDGRID_API_KEY is absent).
+//      in the response if RESEND_API_KEY is absent).
 //   7. Write an audit_log entry.
 //
 // Mirror of any change here in firestore.rules and the client permissions
@@ -24,7 +24,7 @@ import { randomBytes } from "node:crypto";
 import { db, adminAuth } from "./admin";
 import { canInvite, canAssignRole, type Role, type ActorDoc } from "./permissions";
 import { writeAudit } from "./audit";
-import { sendInviteEmail, SENDGRID_API_KEY } from "./email";
+import { sendInviteEmail, RESEND_API_KEY } from "./email";
 
 type Department = "academic" | "administration" | "operations" | "support" | "it" | "maintenance" | "health";
 type ContractType = "permanent" | "fixed_term" | "part_time" | "consultant";
@@ -70,7 +70,7 @@ function isValidRole(role: unknown): role is Role {
 export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>(
   {
     region: "us-central1",
-    secrets: [SENDGRID_API_KEY],
+    secrets: [RESEND_API_KEY],
     // Limit who can even invoke this. Auth check below is the real enforcement.
     enforceAppCheck: false,
   },
