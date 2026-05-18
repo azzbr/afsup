@@ -28,3 +28,34 @@ export function canAssignRole(actor: ActorDoc | null, targetRole: Role): boolean
   if (actor.role === "hr") return targetRole !== "admin";
   return false;
 }
+
+/**
+ * Can `actor` change `target`'s role or status?
+ * - admin: yes (anyone, any value)
+ * - HR: only if target is NOT an admin
+ * - others: never
+ *
+ * Self-edits are blocked here as a safety rail — even an admin shouldn't
+ * be able to demote themselves accidentally via this surface.
+ */
+export function canEditUserRoleOrStatus(
+  actor: ActorDoc | null,
+  target: { uid: string; role: Role } | null,
+): boolean {
+  if (!actor || !target) return false;
+  if (actor.uid === target.uid) return false;
+  const isAdmin = actor.role === "admin" || actor.viewAll === true;
+  if (isAdmin) return true;
+  if (actor.role === "hr") return target.role !== "admin";
+  return false;
+}
+
+/** Only admin can delete users. Self-delete is blocked. */
+export function canDeleteUser(
+  actor: ActorDoc | null,
+  target: { uid: string } | null,
+): boolean {
+  if (!actor || !target) return false;
+  if (actor.uid === target.uid) return false;
+  return actor.role === "admin" || actor.viewAll === true;
+}

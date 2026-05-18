@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { updateDoc, doc, serverTimestamp, deleteDoc, getDoc } from 'firebase/firestore';
-import { db } from './firebase';
-import { actorFrom, can } from './permissions';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from './firebase';
+import { actorFrom, can, assignableRoles } from './permissions';
 import { resolveBalances, debitLeave } from './hr/leave';
 import { useUsers } from './data/useUsers';
 import { useScheduledTasks } from './data/useScheduledTasks';
@@ -10,7 +11,7 @@ import {
   ShieldAlert, AlertTriangle, CheckCircle, Clock, Plus, ChevronDown,
   MapPin, User, FileText, Camera, X, Trash2, Pause, Play, RefreshCw,
   Calendar, Search, Loader2, FolderOpen, UploadCloud, Download, Filter,
-  MessageSquare, Timer
+  MessageSquare, Timer, ShieldOff, UserCheck, Ban
 } from 'lucide-react';
 
 // --- Sub-components (Badges) ---
@@ -401,41 +402,23 @@ export default function AdminView({
     }
   };
 
-  // --- ROBUST UPDATE FUNCTION (Fixes the issue) ---
+  // Status, role, and delete now go through Cloud Functions. They:
+  //   - validate caller permission server-side (defense-in-depth)
+  //   - write audit_log atomically
+  //   - delete the Firebase Auth user too on delete (so re-invite works)
+  //
+  // Errors come back as HttpsError with human-readable messages — surface
+  // them so the user knows *why* an action failed, not just "permission denied".
+
   const updateUser = async (userId, newStatus) => {
-    // 1. Set loading state for feedback
     setActionLoading(userId);
-
     try {
-      const userRef = doc(db, 'users', userId);
-
-      console.log(`Attempting to update user ${userId} to ${newStatus}...`);
-
-      // 2. Perform the Update
-      await updateDoc(userRef, {
-        status: newStatus,
-        [`${newStatus}At`]: serverTimestamp(),
-        // Ensure role exists if approving
-        isActive: newStatus === 'approved' ? true : false
-      });
-
-      // 3. Verification Step (Double check database)
-      const verifySnap = await getDoc(userRef);
-      if (verifySnap.exists() && verifySnap.data().status !== newStatus) {
-        throw new Error("Database verification failed. The update was rejected.");
-      }
-
-      // 4. Success Feedback
-      alert(`Success: User marked as ${newStatus}`);
-      await fetchData(); // Refresh UI with real server data
-
+      const call = httpsCallable(functions, 'updateUserStatus');
+      await call({ uid: userId, status: newStatus });
+      // No refetch — useUsers subscription pushes the change in automatically.
     } catch (error) {
-      console.error("Update failed:", error);
-      // 5. Error Handling: Show the REAL reason (e.g., "Missing Permissions")
-      alert(`Update Failed: ${error.message}\n\nCheck if your account has 'admin' role in the database.`);
-
-      // Force refresh to revert UI if it was optimistic
-      fetchData();
+      console.error("Status change failed:", error);
+      alert(`Could not change status: ${error.message}`);
     } finally {
       setActionLoading(null);
     }
@@ -444,22 +427,33 @@ export default function AdminView({
   const updateRole = async (userId, newRole) => {
     setActionLoading(userId);
     try {
-      await updateDoc(doc(db, 'users', userId), { role: newRole });
-      await fetchData();
+      const call = httpsCallable(functions, 'updateUserRole');
+      await call({ uid: userId, role: newRole });
       setOpenDropdown(null);
-      alert(`Role updated to ${newRole}`);
     } catch (error) {
-      console.error(error);
-      alert("Failed to update role: " + error.message);
+      console.error("Role change failed:", error);
+      alert(`Could not change role: ${error.message}`);
     } finally {
       setActionLoading(null);
     }
   };
 
-  const deleteUser = async (userId) => {
-    if (confirm("Delete this user permanently?")) {
-      await deleteDoc(doc(db, 'users', userId));
-      fetchData();
+  // Modal-driven delete. The confirmation lives in a real modal so the user
+  // sees what they're about to do (vs. an OS confirm() popup).
+  const [deleteTarget, setDeleteTarget] = useState(null); // { id, displayName, email } | null
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setActionLoading(deleteTarget.id);
+    try {
+      const call = httpsCallable(functions, 'deleteUser');
+      await call({ uid: deleteTarget.id });
+      setDeleteTarget(null);
+    } catch (error) {
+      console.error("Delete failed:", error);
+      alert(`Could not delete user: ${error.message}`);
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -819,67 +813,99 @@ export default function AdminView({
                                 <FolderOpen size={16} />
                               </button>
 
-                              {!isCurrentUser && (
-                                <>
-                                  {/* Role Dropdown - Only HR/Admin can change roles */}
-                                  <div className="relative inline-block">
-                                    <button
-                                      onClick={() => setOpenDropdown(openDropdown === u.id ? null : u.id)}
-                                      disabled={actionLoading === u.id}
-                                      className="text-slate-600 hover:bg-slate-50 p-1.5 rounded"
-                                      title="Change Role"
-                                    >
-                                      <User size={16} />
-                                    </button>
-                                    {openDropdown === u.id && (
-                                      <div className="absolute top-12 right-0 w-32 bg-white border border-slate-200 shadow-xl rounded-lg z-10 py-1">
-                                        {u.role !== 'staff' && (
-                                          <button
-                                            onClick={() => updateRole(u.id, 'staff')}
-                                            className="w-full text-left px-4 py-2 text-xs hover:bg-slate-50"
-                                          >
-                                            Staff
-                                          </button>
-                                        )}
-                                        {u.role !== 'maintenance' && (
-                                          <button
-                                            onClick={() => updateRole(u.id, 'maintenance')}
-                                            className="w-full text-left px-4 py-2 text-xs hover:bg-slate-50"
-                                          >
-                                            Maintenance
-                                          </button>
-                                        )}
-                                        {u.role !== 'admin' && (userData.role === 'admin') && (
-                                          <button
-                                            onClick={() => updateRole(u.id, 'admin')}
-                                            className="w-full text-left px-4 py-2 text-xs hover:bg-slate-50 font-bold text-red-600"
-                                          >
-                                            Admin
-                                          </button>
+                              {!isCurrentUser && (() => {
+                                // All gating goes through can() / assignableRoles().
+                                // If the user can't perform an action, the button
+                                // doesn't render — no cryptic permission errors.
+                                const canEditRole = can(actor, 'user.edit.role', {
+                                  type: 'user',
+                                  data: { uid: u.id, role: u.role || 'staff' },
+                                });
+                                const canEditStatus = can(actor, 'user.edit.status', {
+                                  type: 'user',
+                                  data: { uid: u.id, role: u.role || 'staff' },
+                                });
+                                const canDelete = can(actor, 'user.delete');
+                                const rolesIMayAssign = assignableRoles(actor);
+
+                                return (
+                                  <>
+                                    {/* Role Dropdown */}
+                                    {canEditRole && rolesIMayAssign.length > 0 && (
+                                      <div className="relative inline-block">
+                                        <button
+                                          onClick={() => setOpenDropdown(openDropdown === u.id ? null : u.id)}
+                                          disabled={actionLoading === u.id}
+                                          className="text-slate-600 hover:bg-slate-50 p-1.5 rounded"
+                                          title="Change Role"
+                                        >
+                                          <User size={16} />
+                                        </button>
+                                        {openDropdown === u.id && (
+                                          <div className="absolute top-12 right-0 w-36 bg-white border border-slate-200 shadow-xl rounded-lg z-10 py-1">
+                                            {rolesIMayAssign
+                                              .filter(r => r !== u.role)
+                                              .map(r => (
+                                                <button
+                                                  key={r}
+                                                  onClick={() => updateRole(u.id, r)}
+                                                  className={`w-full text-left px-4 py-2 text-xs hover:bg-slate-50 capitalize ${r === 'admin' ? 'font-bold text-red-600' : ''}`}
+                                                >
+                                                  {r}
+                                                </button>
+                                              ))}
+                                          </div>
                                         )}
                                       </div>
                                     )}
-                                  </div>
 
-                                  {/* Approval/Actions */}
-                                  {u.status !== 'approved' && (
-                                    <button onClick={() => updateUser(u.id, 'approved')} className="text-emerald-600 hover:bg-emerald-50 p-1.5 rounded" title="Approve User">
-                                      <CheckCircle size={16} />
-                                    </button>
-                                  )}
-                                  {u.status !== 'blocked' && (
-                                    <button onClick={() => updateUser(u.id, 'blocked')} className="text-amber-600 hover:bg-indigo-50 p-1.5 rounded" title="Block User">
-                                      <Pause size={16} />
-                                    </button>
-                                  )}
-                                  {/* CRITICAL: HR cannot delete HR, only Admin can */}
-                                  {(userData.role === 'admin' || (userData.role === 'hr' && u.role !== 'hr')) && (
-                                    <button onClick={() => deleteUser(u.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Delete User">
-                                      <Trash2 size={16} />
-                                    </button>
-                                  )}
-                                </>
-                              )}
+                                    {/* Status actions — bi-directional */}
+                                    {canEditStatus && u.status !== 'approved' && (
+                                      <button
+                                        onClick={() => updateUser(u.id, 'approved')}
+                                        className="text-emerald-600 hover:bg-emerald-50 p-1.5 rounded"
+                                        title={u.status === 'blocked' ? 'Unblock User' : u.status === 'suspended' ? 'Reinstate User' : 'Approve User'}
+                                      >
+                                        {u.status === 'blocked' || u.status === 'suspended' ? <UserCheck size={16} /> : <CheckCircle size={16} />}
+                                      </button>
+                                    )}
+                                    {canEditStatus && u.status === 'approved' && (
+                                      <button
+                                        onClick={() => updateUser(u.id, 'suspended')}
+                                        className="text-amber-600 hover:bg-amber-50 p-1.5 rounded"
+                                        title="Suspend User (temporary, can be undone)"
+                                      >
+                                        <Pause size={16} />
+                                      </button>
+                                    )}
+                                    {canEditStatus && u.status !== 'blocked' && (
+                                      <button
+                                        onClick={() => updateUser(u.id, 'blocked')}
+                                        className="text-orange-600 hover:bg-orange-50 p-1.5 rounded"
+                                        title="Block User (long-term, can be undone)"
+                                      >
+                                        <Ban size={16} />
+                                      </button>
+                                    )}
+
+                                    {/* Delete — opens confirmation modal */}
+                                    {canDelete && (
+                                      <button
+                                        onClick={() => setDeleteTarget({
+                                          id: u.id,
+                                          displayName: u.displayName || u.email,
+                                          email: u.email,
+                                          role: u.role,
+                                        })}
+                                        className="text-red-500 hover:bg-red-50 p-1.5 rounded"
+                                        title="Delete User"
+                                      >
+                                        <Trash2 size={16} />
+                                      </button>
+                                    )}
+                                  </>
+                                );
+                              })()}
                             </>
                           )}
                         </td>
@@ -961,6 +987,59 @@ export default function AdminView({
         onClose={() => setShowDetailModal(false)}
         ticket={detailTicket}
       />
+
+      {/* Delete User Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-xl bg-red-100 flex items-center justify-center shrink-0">
+                <Trash2 className="text-red-600" size={22} />
+              </div>
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Delete this user?</h3>
+                <p className="text-xs text-slate-500 mt-0.5">This cannot be undone.</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-5 text-sm">
+              <p className="font-medium text-slate-900">{deleteTarget.displayName}</p>
+              <p className="text-slate-500 mt-0.5">{deleteTarget.email}</p>
+              <p className="text-xs text-slate-400 mt-2 capitalize">Role: {deleteTarget.role}</p>
+            </div>
+
+            <div className="bg-red-50 border border-red-100 rounded-xl p-3 mb-5">
+              <p className="text-xs font-bold text-red-800 uppercase mb-1">What will be removed</p>
+              <ul className="text-xs text-red-700 space-y-1">
+                <li>• HR profile and all associated data</li>
+                <li>• Firebase Auth login account</li>
+                <li>• An audit_log entry is written for forensic record</li>
+              </ul>
+              <p className="text-xs text-red-700 mt-2">
+                After deletion, this email can be invited again as a fresh user.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={actionLoading === deleteTarget.id}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium text-sm disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={actionLoading === deleteTarget.id}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-sm disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {actionLoading === deleteTarget.id && <Loader2 className="w-4 h-4 animate-spin" />}
+                {actionLoading === deleteTarget.id ? 'Deleting…' : 'Delete user'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* HR Documents Viewer Modal */}
       {showDocModal && (

@@ -31,36 +31,53 @@ service cloud.firestore {
 
     // 1. Users Collection
     match /users/{userId} {
-      // 1. User sees own profile (full access)
-      // 2. Admin sees Everyone (full access)
-      // 3. HR sees everyone EXCEPT Admins
-      // 4. Maintenance/Staff see basic info (limited to safe fields)
+      // READ:
+      //   - own profile
+      //   - admin sees everyone
+      //   - HR sees non-admins
+      //   - maintenance sees staff + maintenance
+      //   - staff sees other staff
       allow read: if isAuthenticated() && (
-        request.auth.uid == userId || // Own profile
-        isAdmin() || // Admin sees all
-        (getUserRole() == 'hr' && resource.data.role != 'admin') || // HR sees non-admins
+        request.auth.uid == userId ||
+        isAdmin() ||
+        (getUserRole() == 'hr' && resource.data.role != 'admin') ||
         (getUserRole() == 'maintenance' && ['staff', 'maintenance'].hasAny([resource.data.role])) ||
         (getUserRole() == 'staff' && resource.data.role == 'staff')
       );
 
-      // Create: Registration rules (same as before)
+      // CREATE:
+      //   - Self-registration (legacy path): must start as 'pending', cannot self-elevate to admin
+      //   - Super-admin email seed: allowed to bootstrap the first admin
+      //   - Invitation Cloud Function creates with status='invited' via admin SDK (bypasses rules)
       allow create: if isAuthenticated() && request.auth.uid == userId
                     && (
-                       // Normal User: Must be pending & not admin
                        (request.resource.data.status == 'pending' && request.resource.data.role != 'admin')
                        ||
-                       // Super Admin Exception: Allow creating admin role if email matches
                        (request.auth.token.email == 'admin@afs.edu.bh')
                     );
 
-      // UPDATE RULE CHANGE: Allow Admins to update anyone. Allow Users to update THEMSELVES (but prevent them from changing their role/status)
-      allow update: if isAdmin()
-                    || (isAuthenticated() && request.auth.uid == userId
-                        // Prevent user from changing their own role or status to 'admin'/'approved'
-                        && request.resource.data.role == resource.data.role
-                        && request.resource.data.status == resource.data.status);
+      // UPDATE — IMPORTANT INVARIANTS:
+      //   - role and status can NEVER be changed via direct client write.
+      //     Both go through the updateUserRole / updateUserStatus Cloud
+      //     Functions, which write audit_log atomically.
+      //   - Subject to that, admins can edit anyone, HR can edit non-admins
+      //     (salary, leave balance, etc.), and any user can edit their own
+      //     non-restricted profile fields.
+      allow update: if (
+        // role + status are immutable from the client surface
+        request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+      ) && (
+        isAdmin()
+        || (getUserRole() == 'hr' && resource.data.role != 'admin')
+        || (isAuthenticated() && request.auth.uid == userId)
+      );
 
-      allow delete: if isAdmin();
+      // DELETE — disallowed from the client.
+      // deleteUser Cloud Function removes both the auth user and this doc;
+      // direct client deletes would leave orphaned auth accounts that
+      // prevent re-invite of the same email.
+      allow delete: if false;
     }
 
     // 2. Maintenance Tickets
