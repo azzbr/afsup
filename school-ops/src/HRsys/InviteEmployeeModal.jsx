@@ -1,6 +1,6 @@
 // HR-facing modal for inviting a new employee. Calls the `inviteUser` Cloud
 // Function and surfaces the generated invite URL so the admin can either
-// (a) confirm SendGrid mailed it, or (b) copy and share the link manually.
+// (a) confirm the email was delivered, or (b) copy and share the link manually.
 
 import React, { useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
@@ -136,7 +136,7 @@ export default function InviteEmployeeModal({ isOpen, onClose, userData }) {
                   <p className="text-emerald-600">
                     {result.emailSent
                       ? 'An email has been sent to the invitee.'
-                      : 'Email not sent (SendGrid not configured). Copy the link below and share it manually.'}
+                      : 'Email could not be sent — copy the link below and share it manually. (Common cause: the recipient address is not allowed by your email provider while your sending domain is unverified.)'}
                   </p>
                 </div>
               </div>
