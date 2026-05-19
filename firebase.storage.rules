@@ -5,6 +5,11 @@ service firebase.storage {
     // Check if user is logged in
     function isAuth() { return request.auth != null; }
 
+    // Role of the requesting user, read from their Firestore user doc.
+    function callerRole() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role;
+    }
+
     // Check if file is image OR pdf
     function isValidType() {
       return request.resource.contentType.matches('image/.*') ||
@@ -22,14 +27,24 @@ service firebase.storage {
 
     // --- HR DOCUMENTS (SECURE VAULT) ---
     // Structure: hr-documents/{userId}/{filename}
+    //
+    // Mirrors the role matrix in CLAUDE.md §6: HR and admin can read AND
+    // write any HR document (so HR can attach a new hire's CV during
+    // onboarding, etc.). Regular users can only access their own folder.
     match /hr-documents/{userId}/{fileName} {
-      // 1. READ: User can read OWN files. Admins can read ALL.
-      allow read: if isAuth() && (request.auth.uid == userId ||
-                  firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      // READ
+      allow read: if isAuth() && (
+        request.auth.uid == userId ||
+        callerRole() == 'admin' ||
+        callerRole() == 'hr'
+      );
 
-      // 2. WRITE: User can upload to THEIR OWN folder only.
-      allow write: if isAuth() && request.auth.uid == userId
-                   && isValidType() && isSmallEnough();
+      // WRITE — same matrix, plus the file must be a valid type + size.
+      allow write: if isAuth() && (
+        request.auth.uid == userId ||
+        callerRole() == 'admin' ||
+        callerRole() == 'hr'
+      ) && isValidType() && isSmallEnough();
     }
   }
 }

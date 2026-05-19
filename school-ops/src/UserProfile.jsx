@@ -152,15 +152,21 @@ export default function UserProfile({ userData, user }) {
       return;
     }
 
-    // IBAN validation - Bahrain IBAN format: BH + 2-digit bank code + 14 digits (22 chars total)
-    if (formData.iban) {
-      const iban = formData.iban.toUpperCase().replace(/\s+/g, ''); // Remove spaces
-      const bahrainIbanRegex = /^BH\d{2}[A-Z0-9]{14}$/; // BH + 2 digits + 14 alphanumeric
-
-      if (!bahrainIbanRegex.test(iban) || iban.length !== 22) {
-        alert("Invalid Bahrain IBAN format. Must be 22 characters: BH + Bank Code + Account Number");
-        setLoading(false);
-        return;
+    // IBAN validation — Bahrain format: BH + 2-digit bank code + 14 alphanumeric.
+    // Skip validation when the user hasn't actually entered an IBAN yet — the
+    // default value on new users is the placeholder "BH", which would otherwise
+    // block their entire profile save. The HR compliance dashboard already
+    // surfaces "Missing IBAN" so we don't need to block here.
+    {
+      const ibanInput = (formData.iban || '').toUpperCase().replace(/\s+/g, '');
+      const ibanIsDefault = ibanInput === '' || ibanInput === 'BH';
+      if (!ibanIsDefault) {
+        const bahrainIbanRegex = /^BH\d{2}[A-Z0-9]{14}$/;
+        if (!bahrainIbanRegex.test(ibanInput) || ibanInput.length !== 22) {
+          alert("Invalid Bahrain IBAN format. Must be 22 characters: BH + Bank Code + Account Number");
+          setLoading(false);
+          return;
+        }
       }
     }
 
@@ -1515,6 +1521,16 @@ const DocumentUpload = ({ label, docType, currentUrl, userId, onUpload }) => {
       return;
     }
 
+    // Validate size client-side — match the 5MB cap in firebase.storage.rules.
+    // Without this check Firebase rejects the upload with a misleading
+    // "storage/unauthorized" error that looks like a permission problem.
+    const MAX_BYTES = 5 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+      const mb = (file.size / (1024 * 1024)).toFixed(1);
+      alert(`File is too large (${mb} MB). Maximum allowed is 5 MB. Try a JPG (not PNG) or compress the image first.`);
+      return;
+    }
+
     setUploading(true);
     // Create a unique path: hr-documents/USER_ID/DOC_TYPE_TIMESTAMP.ext
     const ext = file.name.split('.').pop();
@@ -1525,7 +1541,12 @@ const DocumentUpload = ({ label, docType, currentUrl, userId, onUpload }) => {
     if (result.success) {
       onUpload(docType, result.downloadURL);
     } else {
-      alert('Upload failed: ' + result.error);
+      // Translate the misleading storage/unauthorized into something useful.
+      const raw = String(result.error || '');
+      const friendly = raw.includes('unauthorized')
+        ? 'Upload rejected. Check that the file is under 5 MB and is a JPG, PNG, or PDF. If it still fails, sign out and back in.'
+        : 'Upload failed: ' + raw;
+      alert(friendly);
     }
     setUploading(false);
   };
