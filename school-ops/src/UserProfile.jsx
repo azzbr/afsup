@@ -161,8 +161,8 @@ export default function UserProfile({ userData, user }) {
       const ibanInput = (formData.iban || '').toUpperCase().replace(/\s+/g, '');
       const ibanIsDefault = ibanInput === '' || ibanInput === 'BH';
       if (!ibanIsDefault) {
-        const bahrainIbanRegex = /^BH\d{2}[A-Z0-9]{14}$/;
-        if (!bahrainIbanRegex.test(ibanInput) || ibanInput.length !== 22) {
+        const bahrainIbanRegex = /^BH\d{2}[A-Z0-9]{18}$/;
+        if (!bahrainIbanRegex.test(ibanInput)) {
           alert("Invalid Bahrain IBAN format. Must be 22 characters: BH + Bank Code + Account Number");
           setLoading(false);
           return;
