@@ -14,7 +14,9 @@ This file is the source of truth for the architectural direction of the **Al Faj
 - Hosting: Netlify (config in [netlify.toml](netlify.toml))
 - App code lives under [school-ops/](school-ops/)
 
-**Roles:** `staff`, `maintenance`, `hr`, `admin` — see [Section 6](#6-permissions-matrix).
+**Roles:** `staff`, `maintenance`, `hr`, `admin`, `super_admin` — see [Section 6](#6-permissions-matrix).
+
+> **Naming note.** The role string `super_admin` is the **internal identifier** used in code, Firestore, and rules. The UI labels it **"Head Admin"** because that matches how the school distinguishes the principal from the admin assistants. Treat the two terms as interchangeable in this document.
 
 ---
 
@@ -34,7 +36,7 @@ User-facing model:
 **What works well:**
 - Maintenance ticket flow (report → start → resolve) is solid and battle-tested
 - Firestore security rules ([firestore.rules](firestore.rules)) are well-thought-out and enforce role separation server-side
-- Bahrain-specific HRIS domain logic (GOSI 5/12%, WPS, sick-leave tiers 15/20/20, LMRA visa tracking) is correct
+- Bahrain-specific HRIS domain logic (sick-leave tiers 15/20/20, LMRA visa tracking, MOE teacher approval cycle) is correct in shape; **GOSI rates need updating to 17%/8% Bahraini + 3%/1% expat** (see PHASES.md Appendix A); WPS export should target the LMRA CSV format (not the UAE SIF)
 
 **What's broken or smells:**
 - **Registration race condition** patched with 500ms polling + a `REGISTRATION_IN_PROGRESS` localStorage flag — see [auth.js:60](school-ops/src/auth.js:60) and [App.jsx:30](school-ops/src/App.jsx:30). Symptom of the wrong flow (user-driven registration creating the Firestore user doc *after* the auth user).
@@ -103,8 +105,8 @@ The data model stays in separate Firestore collections. Unification happens at t
 |---|---|---|
 | `uid`, `email`, `displayName` | string | invite handler / self |
 | `firstName`, `middleName`, `lastName`, `arabicName` | string | self, HR, admin |
-| `role` | `'staff' \| 'maintenance' \| 'hr' \| 'admin'` | HR (non-admin only), admin |
-| `status` | `'invited' \| 'approved' \| 'suspended'` | invite handler, HR, admin |
+| `role` | `'staff' \| 'maintenance' \| 'hr' \| 'admin' \| 'super_admin'` | HR (non-admin only), admin (non-admin only), super_admin (any) |
+| `status` | `'invited' \| 'approved' \| 'suspended' \| 'blocked'` | invite handler, HR, admin, super_admin |
 | `nationality` | enum from [constants.ts](school-ops/src/constants.ts) | self |
 | `gender`, `maritalStatus` | enum | self |
 | `dateOfBirth` | Timestamp | self |
@@ -187,11 +189,32 @@ Existing schema is fine — **but no code runs them yet.** Phase 4 adds a Cloud 
 | Field | Type |
 |---|---|
 | `actorUid` | string |
-| `action` | `'user.approved'`, `'user.invited'`, `'ticket.escalated'`, `'salary.updated'`, etc. |
-| `targetType` | `'user' \| 'ticket' \| 'leave_request' \| 'scheduled_task'` |
+| `action` | `'user.approved'`, `'user.invited'`, `'ticket.escalated'`, `'salary.updated'`, `'settings.updated'`, `'role.promoted'`, etc. |
+| `targetType` | `'user' \| 'ticket' \| 'leave_request' \| 'scheduled_task' \| 'school_settings'` |
 | `targetId` | string |
 | `before`, `after` | object (diff) |
 | `at` | Timestamp |
+
+### `school_settings/{singleton}` (NEW — Phase 2.6, Head Admin only)
+
+A single document (id `current`) holding school-wide knobs that used to be hardcoded. Head Admin is the only role that can edit; HR/admin can read so dashboards can show the current values.
+
+| Field | Type | Default |
+|---|---|---|
+| `schoolNameEn`, `schoolNameAr` | string | "Al Fajer International School" |
+| `domain` | string | "afs.edu.bh" |
+| `academicYearStart`, `academicYearEnd` | Timestamp | Sept 1 → June 30 |
+| `workingDays` | `Day[]` (Mon–Sun) | `['sun','mon','tue','wed','thu']` |
+| `weeklyOffDays` | `Day[]` | `['fri','sat']` |
+| `publicHolidays` | `{ date: Timestamp; label: string }[]` | seeded Bahrain national holidays |
+| `defaultAnnualLeaveDays` | number | 30 |
+| `sickLeaveTiers` | `{ fullPay: number; halfPay: number; noPay: number }` | `{15,20,20}` |
+| `gosi.bahraini.employerRate`, `gosi.bahraini.employeeRate` | number | `0.17`, `0.08` (verify with payroll provider — see PHASES.md Appendix A) |
+| `gosi.expat.employerRate`, `gosi.expat.employeeRate` | number | `0.03`, `0.01` |
+| `wps.employerCR` | string | school CR number |
+| `wps.bankRoutingCode` | string | bank code for LMRA CSV upload (Bahrain WPS 2.0 uses LMRA EMS, not the UAE SIF format) |
+| `notifyOnCriticalCompliance` | `string[]` (emails) | `["principal@afs.edu.bh"]` |
+| `updatedAt`, `updatedBy` | audit | — |
 
 ---
 
@@ -199,30 +222,50 @@ Existing schema is fine — **but no code runs them yet.** Phase 4 adds a Cloud 
 
 **Single source of truth.** Both UI components and [firestore.rules](firestore.rules) MUST reflect this table.
 
-| Action | staff | maintenance | hr | admin |
-|---|:---:|:---:|:---:|:---:|
-| Create ticket | ✓ | ✓ | ✓ | ✓ |
-| View own tickets | ✓ | ✓ | ✓ | ✓ |
-| View all tickets | – | ✓ | ✓ | ✓ |
-| Update ticket status | – | ✓ | – | ✓ |
-| Escalate ticket priority | – | – | ✓ | ✓ |
-| Delete ticket | – | – | – | ✓ |
-| Create scheduled task | – | – | – | ✓ |
-| View own profile | ✓ | ✓ | ✓ | ✓ |
-| View staff/maintenance profiles | – | ✓ | ✓ | ✓ |
-| View HR profiles | – | – | ✓ | ✓ |
-| View admin profiles | – | – | – | ✓ |
-| Edit own non-restricted profile fields | ✓ | ✓ | ✓ | ✓ |
-| Edit role/status of others (non-admin target) | – | – | ✓ | ✓ |
-| Edit role/status of admins | – | – | – | ✓ |
-| Edit salary / leave balance / sick days | – | – | ✓ | ✓ |
-| Invite new user | – | – | ✓ | ✓ |
-| Submit own leave request | ✓ | ✓ | ✓ | ✓ |
-| Approve/reject leave request | – | – | ✓ | ✓ |
-| Read audit log | – | – | ✓ | ✓ |
-| Delete users | – | – | – | ✓ |
+The role hierarchy is **`super_admin` > `admin` > `hr` ≈ `maintenance` ≈ `staff`**. `super_admin` (Head Admin / Principal) inherits every `admin` permission plus the items in the bottom rows.
 
-**Rule of thumb:** HR can do everything an admin can EXCEPT touch admin accounts or grant the admin role.
+| Action | staff | maintenance | hr | admin | super_admin |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Tickets** | | | | | |
+| Create ticket | ✓ | ✓ | ✓ | ✓ | ✓ |
+| View own tickets | ✓ | ✓ | ✓ | ✓ | ✓ |
+| View all tickets | – | ✓ | ✓ | ✓ | ✓ |
+| Update ticket status | – | ✓ | – | ✓ | ✓ |
+| Escalate ticket priority | – | – | ✓ | ✓ | ✓ |
+| Delete ticket | – | – | – | ✓ | ✓ |
+| Create scheduled task | – | – | – | ✓ | ✓ |
+| **Profiles** | | | | | |
+| View own profile | ✓ | ✓ | ✓ | ✓ | ✓ |
+| View staff/maintenance profiles | – | ✓ | ✓ | ✓ | ✓ |
+| View HR profiles | – | – | ✓ | ✓ | ✓ |
+| View admin profiles | – | – | – | ✓ | ✓ |
+| View super_admin profiles | – | – | – | – | ✓ |
+| Edit own non-restricted profile fields | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Edit role/status of staff/maint/hr | – | – | ✓ | ✓ | ✓ |
+| Edit role/status of admins | – | – | – | – | ✓ |
+| Edit role/status of super_admins | – | – | – | – | ✓ (with last-one guard) |
+| Edit salary / leave balance / sick days (non-admin) | – | – | ✓ | ✓ | ✓ |
+| Edit salary of admin or super_admin | – | – | – | – | ✓ |
+| Invite staff / maintenance / hr | – | – | ✓ | ✓ | ✓ |
+| Invite admin | – | – | – | – | ✓ |
+| Invite super_admin | – | – | – | – | ✓ |
+| Delete non-admin users | – | – | – | ✓ | ✓ |
+| Delete admin or super_admin | – | – | – | – | ✓ (with last-one guard) |
+| **Leave** | | | | | |
+| Submit own leave request | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Approve/reject leave request | – | – | ✓ | ✓ | ✓ |
+| Approve own leave request | – | – | – | – | – (always routes up) |
+| **Audit & Settings** | | | | | |
+| Read audit log (entries about non-admins) | – | – | ✓ | ✓ | ✓ |
+| Read audit log (all entries, incl. admins + super_admins) | – | – | – | – | ✓ |
+| Read school_settings | – | – | ✓ | ✓ | ✓ |
+| Edit school_settings | – | – | – | – | ✓ |
+| Impersonate / "log in as" another user | – | – | – | – | ✓ (audit-logged) |
+
+**Rules of thumb:**
+- **HR** is everything an `admin` does for non-admin people. Cannot touch `admin` or `super_admin` rows at all.
+- **admin** does day-to-day ops (HR + scheduling + tickets + non-admin user lifecycle). Cannot touch other admins or super_admins.
+- **super_admin** is the principal-level role: the only one who can change school-wide settings, manage the admin/super_admin tier itself, and read every audit-log entry. The minimum number of active super_admins at any time is **1** — a "last super_admin" guard prevents the system from being left with zero.
 
 **Implementation:** one `src/permissions.ts` exporting a single function:
 
@@ -230,14 +273,19 @@ Existing schema is fine — **but no code runs them yet.** Phase 4 adds a Cloud 
 type Action =
   | 'ticket.create' | 'ticket.update' | 'ticket.delete' | 'ticket.escalate'
   | 'user.invite' | 'user.editRole' | 'user.editSalary' | 'user.delete'
+  | 'user.impersonate'
   | 'leave.approve' | 'leave.submit'
   | 'schedule.create'
+  | 'settings.read' | 'settings.edit'
+  | 'audit.read' | 'audit.readAll'
   // ...
 
 function can(actor: User, action: Action, target?: { type: string; data?: any }): boolean
 ```
 
 UI components import `can()`. [firestore.rules](firestore.rules) mirrors the same logic. A test suite under `tests/rules/` (Firebase emulator) verifies both layers agree.
+
+**Migration plan** (Phase 2.6): one Cloud Function `bootstrapSuperAdmin` accepts a target email, requires the caller to be either (a) the hardcoded seed email from `auth.js:58` *or* (b) an existing super_admin, and flips that user's role from `admin` → `super_admin`. Run it ONCE for the principal. After that, the seed email override is removed.
 
 ---
 
@@ -383,6 +431,28 @@ These apply to **all new code**. Refactor existing code to match as Phase 1 prog
 - [ ] Multi-type leave management (maternity/paternity/hajj/etc.) — Phase 2.7
 - [ ] Org chart / reporting hierarchy — Phase 3
 
+### Phase 2.6 — Head Admin role (super_admin)
+- [ ] Add `super_admin` to the `Role` union in [constants.ts](school-ops/src/constants.ts) and the `ROLES` map
+- [ ] Update [permissions.ts](school-ops/src/permissions.ts):
+  - Add `isSuperAdmin` derived flag
+  - Add new actions: `settings.read`, `settings.edit`, `audit.readAll`, `user.impersonate`
+  - Tighten `user.edit.role/status`, `user.invite`, `user.delete` so admin → admin is denied
+  - Update `assignableRoles()` to return all 5 for super_admin
+- [ ] Update [firestore.rules](firestore.rules):
+  - Add `isSuperAdmin()` helper
+  - Replace every `isAdmin()` check that should be principal-only with `isSuperAdmin()`
+  - Add rules for `school_settings/{singleton}`
+  - Tighten `users` UPDATE: deny role/status changes targeting an `admin` or `super_admin` unless caller is `super_admin`
+- [ ] Create `school_settings/current` document (schema in §5), seeded with current hardcoded values
+- [ ] Build a "School Settings" page (Head Admin only) — academic year, working days, holidays, GOSI rates, WPS bank code, notification recipients
+- [ ] Build "Admin Management" view (Head Admin only) — list current admins/super_admins with promote/demote actions
+- [ ] Cloud Function `bootstrapSuperAdmin(email)` — one-time migration to promote the principal from admin → super_admin
+- [ ] Cloud Function `updateUserRole(targetUid, newRole)` — server-side enforcement of the matrix (replaces direct client writes for role/status)
+- [ ] Last-super-admin guard: refuse to demote/delete the only remaining super_admin (both client and Cloud Function)
+- [ ] UI label: render `super_admin` as **"Head Admin"** everywhere (badge color: indigo-700, distinct from admin's slate)
+- [ ] Audit log filter: HR/admin see entries about non-admins; super_admin sees all
+- [ ] Tests: permissions module + emulator tests for role-elevation attempts
+
 ### Phase 3 — Unification & polish
 - [ ] `/employees/:uid` view merging profile + tickets + leave history
 - [ ] `/locations/:name` view with ticket history + scheduled tasks
@@ -401,7 +471,7 @@ These apply to **all new code**. Refactor existing code to match as Phase 1 prog
 - [ ] Arabic i18n (RTL layout, translations)
 - [ ] Mobile app (React Native, reusing data + permissions layer)
 - [ ] Analytics dashboard (Recharts) — ticket throughput, average resolution time, leave usage trends
-- [ ] Payroll export (WPS-compliant SIF file)
+- [ ] Payroll export (Bahrain LMRA WPS CSV — not UAE SIF — uploaded via LMRA EMS portal)
 - [ ] Attendance integration (biometric devices, ID scanners)
 - [ ] Multi-tenant readiness (sell to other schools)
 
