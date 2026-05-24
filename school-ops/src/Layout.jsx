@@ -5,11 +5,70 @@
 
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from './firebase';
 import { actorFrom, canSeeRoleView } from './permissions';
 import { useUnreadCount } from './data/useNotifications';
-import { LogOut, Menu, X, Users, Bell } from 'lucide-react';
+import { LogOut, Menu, X, Users, Bell, Crown } from 'lucide-react';
 
 import logo from './assets/LogoT.png';
+
+// ---------------------------------------------------------------------------
+// One-shot Head Admin self-bootstrap banner.
+// Visible ONLY for the designated principal (azizbr@gmail.com) while they
+// still hold a non-super_admin role. After successful promotion the banner
+// vanishes automatically because the role check no longer matches.
+// Remove this component once the principal is promoted in production.
+// ---------------------------------------------------------------------------
+const BOOTSTRAP_EMAIL = 'azizbr@gmail.com';
+
+function HeadAdminBootstrapBanner({ userData }) {
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+
+  if (!userData) return null;
+  const email = String(userData.email || '').toLowerCase();
+  if (email !== BOOTSTRAP_EMAIL) return null;
+  if (userData.role === 'super_admin') return null;
+
+  const handleClick = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const fn = httpsCallable(functions, 'bootstrapSuperAdmin');
+      const res = await fn({ email });
+      setMsg(res.data?.message || 'Promoted.');
+      // Force a fresh user-doc read on next render.
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err) {
+      setMsg('Failed: ' + (err?.message || String(err)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between gap-4">
+      <div className="flex items-center gap-3 text-amber-900">
+        <Crown size={20} />
+        <div className="text-sm">
+          <p className="font-semibold">One-time setup — promote yourself to Head Admin</p>
+          <p className="text-amber-700">You are signed in as the designated principal. Click to elevate your role to <code className="px-1 bg-amber-100 rounded">super_admin</code>.</p>
+        </div>
+      </div>
+      <div className="flex flex-col items-end gap-1">
+        <button
+          type="button"
+          onClick={handleClick}
+          disabled={busy}
+          className="px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white text-sm font-bold rounded-lg disabled:opacity-50"
+        >
+          {busy ? 'Promoting…' : 'Promote me'}
+        </button>
+        {msg && <span className="text-xs text-amber-800">{msg}</span>}
+      </div>
+    </div>
+  );
+}
 
 const navItems = [
   { to: '/',                 label: 'Submit New Ticket', view: 'staff'       },
@@ -303,6 +362,7 @@ export default function Layout({
       {/* --- MAIN CONTENT AREA --- */}
       <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-50/50">
         <div className="max-w-6xl mx-auto p-4 md:p-8">
+          <HeadAdminBootstrapBanner userData={userData} />
           {children}
         </div>
       </main>
