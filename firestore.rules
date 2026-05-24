@@ -19,12 +19,19 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
     }
 
+    // Head Admin / super_admin. Inherits every admin power (see CLAUDE.md §6
+    // and PHASES.md Phase 2.6). Until Phase 2.6 carves out super-admin-only
+    // capabilities, super_admin and admin are functionally equal here.
+    function isSuperAdmin() {
+      return isVerifiedUser() && getUserRole() == 'super_admin';
+    }
+
     function isAdmin() {
-      return isVerifiedUser() && getUserRole() == 'admin';
+      return isVerifiedUser() && (getUserRole() == 'admin' || getUserRole() == 'super_admin');
     }
 
     function isMaintenance() {
-      return isVerifiedUser() && (getUserRole() == 'maintenance' || getUserRole() == 'admin');
+      return isVerifiedUser() && (getUserRole() == 'maintenance' || getUserRole() == 'admin' || getUserRole() == 'super_admin');
     }
 
     // --- Collection Rules ---
@@ -40,18 +47,20 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (
         request.auth.uid == userId ||
         isAdmin() ||
-        (getUserRole() == 'hr' && resource.data.role != 'admin') ||
+        (getUserRole() == 'hr' && resource.data.role != 'admin' && resource.data.role != 'super_admin') ||
         (getUserRole() == 'maintenance' && ['staff', 'maintenance'].hasAny([resource.data.role])) ||
         (getUserRole() == 'staff' && resource.data.role == 'staff')
       );
 
       // CREATE:
-      //   - Self-registration (legacy path): must start as 'pending', cannot self-elevate to admin
+      //   - Self-registration (legacy path): must start as 'pending', cannot self-elevate to admin or super_admin
       //   - Super-admin email seed: allowed to bootstrap the first admin
       //   - Invitation Cloud Function creates with status='invited' via admin SDK (bypasses rules)
       allow create: if isAuthenticated() && request.auth.uid == userId
                     && (
-                       (request.resource.data.status == 'pending' && request.resource.data.role != 'admin')
+                       (request.resource.data.status == 'pending'
+                        && request.resource.data.role != 'admin'
+                        && request.resource.data.role != 'super_admin')
                        ||
                        (request.auth.token.email == 'admin@afs.edu.bh')
                     );
@@ -60,16 +69,16 @@ service cloud.firestore {
       //   - role and status can NEVER be changed via direct client write.
       //     Both go through the updateUserRole / updateUserStatus Cloud
       //     Functions, which write audit_log atomically.
-      //   - Subject to that, admins can edit anyone, HR can edit non-admins
-      //     (salary, leave balance, etc.), and any user can edit their own
-      //     non-restricted profile fields.
+      //   - Subject to that, admin/super_admin can edit anyone, HR can edit
+      //     non-admins (salary, leave balance, etc.), and any user can edit
+      //     their own non-restricted profile fields.
       allow update: if (
         // role + status are immutable from the client surface
         request.resource.data.role == resource.data.role
         && request.resource.data.status == resource.data.status
       ) && (
         isAdmin()
-        || (getUserRole() == 'hr' && resource.data.role != 'admin')
+        || (getUserRole() == 'hr' && resource.data.role != 'admin' && resource.data.role != 'super_admin')
         || (isAuthenticated() && request.auth.uid == userId)
       );
 

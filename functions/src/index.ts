@@ -6,3 +6,4 @@ export { acceptInvite } from "./acceptInvite";
 export { runScheduledTasks } from "./runScheduledTasks";
 export { dailyComplianceScan } from "./dailyComplianceScan";
 export { deleteUser, updateUserRole, updateUserStatus } from "./userMutations";
+export { bootstrapSuperAdmin } from "./bootstrapSuperAdmin";

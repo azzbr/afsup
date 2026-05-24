@@ -36,6 +36,7 @@ service firebase.storage {
       allow read: if isAuth() && (
         request.auth.uid == userId ||
         callerRole() == 'admin' ||
+        callerRole() == 'super_admin' ||
         callerRole() == 'hr'
       );
 
@@ -43,6 +44,7 @@ service firebase.storage {
       allow write: if isAuth() && (
         request.auth.uid == userId ||
         callerRole() == 'admin' ||
+        callerRole() == 'super_admin' ||
         callerRole() == 'hr'
       ) && isValidType() && isSmallEnough();
     }

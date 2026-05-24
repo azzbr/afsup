@@ -134,7 +134,7 @@ export const deleteUser = onCall<{ uid: string }>(
 // updateUserRole — change a user's role
 // ============================================================================
 
-const VALID_ROLES: Role[] = ["staff", "maintenance", "hr", "admin"];
+const VALID_ROLES: Role[] = ["staff", "maintenance", "hr", "admin", "super_admin"];
 
 export const updateUserRole = onCall<{ uid: string; role: Role }>(
   { region: "us-central1" },

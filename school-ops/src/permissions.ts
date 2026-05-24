@@ -92,7 +92,12 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
   if (!actor) return false;
 
   const role = actor.role;
-  const isAdmin = role === "admin" || actor.viewAll === true;
+  // super_admin (Head Admin) inherits every admin power. Phase 2.6 will
+  // carve out super-admin-only capabilities (school_settings, audit.readAll,
+  // managing admins themselves) — until then the two roles are functionally
+  // equal and this code happily treats them as such.
+  const isSuperAdmin = role === "super_admin";
+  const isAdmin = role === "admin" || isSuperAdmin || actor.viewAll === true;
   const isHR = role === "hr";
   const isMaintenance = role === "maintenance";
   const isStaff = role === "staff";
@@ -209,7 +214,7 @@ export function canSeeRoleView(
   view: "staff" | "maintenance" | "hr" | "admin",
 ): boolean {
   if (!actor) return false;
-  const isAdmin = actor.role === "admin" || actor.viewAll === true;
+  const isAdmin = actor.role === "admin" || actor.role === "super_admin" || actor.viewAll === true;
   switch (view) {
     case "staff":
       // The Staff "Submit New Ticket" tab is available to every authenticated user.
@@ -234,7 +239,13 @@ export function canSeeRoleView(
 
 export function assignableRoles(actor: Actor | null | undefined): Role[] {
   if (!actor) return [];
+  if (actor.role === "super_admin") {
+    // Head Admin can assign every role, including another super_admin.
+    return ["staff", "maintenance", "hr", "admin", "super_admin"];
+  }
   if (actor.role === "admin" || actor.viewAll) {
+    // Regular admin can assign up to admin, but NOT super_admin —
+    // only Head Admin promotes Head Admins (Phase 2.6 enforcement).
     return ["staff", "maintenance", "hr", "admin"];
   }
   if (actor.role === "hr") {

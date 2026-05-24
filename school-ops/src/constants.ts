@@ -62,6 +62,8 @@ export const ROLES = {
   MAINTENANCE: "maintenance",
   HR: "hr",
   ADMIN: "admin",
+  /** Head Admin — see CLAUDE.md §6 and PHASES.md Phase 2.6. */
+  SUPER_ADMIN: "super_admin",
 } as const;
 
 export type Role = (typeof ROLES)[keyof typeof ROLES];
