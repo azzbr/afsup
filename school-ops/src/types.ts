@@ -217,6 +217,17 @@ export interface Ticket extends Partial<AuditFields> {
   originalPriority?: Priority;
   warnings?: number;
   notes?: string[];
+
+  // Phase 2.8 — additive, optional. Legacy tickets (~43 live) lack all of
+  // these; every reader must tolerate their absence.
+  categoryGroup?: string;
+  impact?: string;
+  assignedToUid?: string;
+  assignedToName?: string;
+  resolvedByUid?: string;
+  duplicateOf?: string;
+  reopenedAt?: Date | null;
+  reopenCount?: number;
 }
 
 // ============================================================================
@@ -270,6 +281,7 @@ export type NotificationType =
   | "leave_request"
   | "ticket_sla"
   | "ticket_assigned"
+  | "ticket_update"
   | "system";
 
 export type NotificationPriority = "critical" | "warning" | "info";

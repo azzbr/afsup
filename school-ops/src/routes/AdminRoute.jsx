@@ -2,7 +2,7 @@
 // delete handler, both previously living in App.jsx but only used here.
 
 import React, { useMemo, useState } from 'react';
-import { addDoc, collection, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc } from 'firebase/firestore';
 import AdminView from '../AdminView';
 import EnhancedScheduleForm from '../enhanced_scheduler';
 import { useRouteContext } from './guards';
@@ -29,17 +29,24 @@ export default function AdminRoute() {
   const handleCreateSchedule = async (data) => {
     if (!user?.uid) return;
     try {
+      // lastRun stays null until the schedule runner actually generates
+      // tickets; nextRun is what the runner queries on. "Start immediately"
+      // means due right now — not one full frequency period from now.
       const payload = {
         ...data,
-        lastRun: data.isStartImmediately ? serverTimestamp() : null,
+        lastRun: null,
+        nextRun: data.isStartImmediately ? new Date() : new Date(data.startDate),
         isActive: true,
         totalLocations: data.locations.length,
-        nextDue: data.nextRun ? new Date(data.nextRun) : null,
         ...auditCreate(user.uid),
       };
       await addDoc(collection(db, 'scheduled_tasks'), payload);
       setShowScheduleForm(false);
-      alert('Schedule Created Successfully');
+      if (data.isStartImmediately) {
+        alert('Schedule created — first tickets will be generated within the hour');
+      } else {
+        alert(`Schedule created — first run scheduled for ${new Date(data.startDate).toLocaleDateString()}`);
+      }
     } catch (err) {
       alert(err.message);
     }

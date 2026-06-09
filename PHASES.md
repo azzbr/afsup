@@ -39,7 +39,7 @@ Phases 2.6 → 5 below take us there.
 | 2.6 — Head Admin role | ◐ Started | super_admin recognized everywhere + bootstrapSuperAdmin live. Settings UI, admin mgmt, guards remain. |
 | 2.6.1 — Audit hotfixes | 🔥 URGENT | June 2026 full-code audit found broken HR-role rules, data-wiping save, dead admin actions. See below. |
 | 2.7 — Multi-type leave | ⏳ Queued | Constants + balance lib exist; submission UI partial; approval must move server-side (see 2.6.1). |
-| 2.8 — Maintenance V2 | 🆕 Planned | Full redesign of Submit Request + Maintenance Queue. Plan below. |
+| 2.8 — Maintenance V2 | ◕ Mostly done (2026-06-10) | Form V2, Queue V2, schedules fix, status-change Cloud Function all shipped. Remaining: supervisor mini-dashboard, `cancelled` status. |
 | 3 — Unification & polish | ⏳ Queued | Profile-merged-with-tickets view, PWA, Sentry. |
 | 4 — Automation | ◐ Started | dailyComplianceScan + runScheduledTasks exist. SLA escalation + event notifications remain. |
 | 5+ — Differentiators | 🆕 Planning | Sharpened by competitor research (see §Appendix A). |
@@ -108,11 +108,11 @@ A line-by-line read of every source file found bugs that block real users today.
 
 ### Medium
 
-- [ ] Ticket status changes (`startJob`, `completeTask`, escalate, batch ops) skip `updatedAt`/`updatedBy` (rule 5) and never notify the reporter (§7b promise).
-- [ ] "by b4bijuv" in the queue: `userData?.name` doesn't exist — use `displayName`. Identity fields on tickets are chaos (email here, uid there, free-typed name in resolvedBy) — standardize on `{uid, displayName}` pairs.
-- [ ] MaintenanceView's in-card sort dropdown is dead (`createdAt?.toDate?.()` on already-converted JS Dates → all rows compare equal); resolved history sorts by created not resolved date.
-- [ ] Scheduler: "Start Immediately" doesn't — it sets `lastRun=now`, so the first tickets appear after a full frequency period (180 days for the semi-annual task). Write `nextRun = now` at creation instead. The `nextDue` field written by AdminRoute is always null (form never sends `nextRun`) — delete it. UI should show computed due date (nextRun ?? lastRun+freq ?? startDate) instead of "N/A".
-- [ ] ReportForm anonymous first-submit uses a stale closure (`currentUser = localUser` right after sign-in) → `reportedBy: undefined` → Firestore addDoc throws on first attempt.
+- [x] ~~Ticket status changes skip `updatedAt`/`updatedBy` and never notify the reporter~~ — **done 2026-06-10**: all ticket mutations stamp audit fields; new `onTicketStatusChange` Cloud Function writes audit_log entries for every transition and notifies the reporter on start/resolve/reopen.
+- [x] ~~"by b4bijuv" in the queue~~ — **done 2026-06-10**: displayName resolution everywhere; tickets now carry `assignedToUid`/`assignedToName`/`resolvedByUid` alongside legacy fields.
+- [x] ~~MaintenanceView's in-card sort dropdown is dead; resolved history sorts by created not resolved date~~ — **done 2026-06-10**: shared `ticketSorters` (urgent default = priority then oldest); resolved history sorts by `resolvedAt`.
+- [x] ~~Scheduler: "Start Immediately" doesn't~~ — **done 2026-06-10**: creation writes `nextRun = now` (or startDate), `lastRun = null`, `nextDue` junk field removed; UI shows `computeScheduleDue()` everywhere instead of "N/A".
+- [x] ~~ReportForm anonymous first-submit stale closure~~ — **done 2026-06-10**: captured returned user from `signInAsAnonymous()` into a local const.
 - [ ] Dead buttons: HR "Export HR Report", "HR Settings", HRDirectory "Export", EmployeeDetailView "Print", no-op refresh buttons. Either wire or remove.
 - [ ] Blocked/suspended **admins** bypass RootLayout's sign-out gate (`status !== 'approved' && role !== 'admin'`); they're saved only by the Auth-disable flag at token refresh. Tighten the condition.
 - [ ] `queryClient` cache survives sign-out (shared school computers) — call `queryClient.clear()` in `handleSignOut`.
@@ -155,10 +155,15 @@ A line-by-line read of every source file found bugs that block real users today.
 
 ### Build order
 
-1. Hotfixes from 2.6.1 that overlap (sort bug, name bug, audit stamps, resolve notification) — 1–2 days
-2. Submit form V2 (categories, duplicate guard, severity hints, confirmation) — 3–4 days
-3. Queue V2 (tabs, claim, dedup-merge, walk-order, timeline) — 1 week
-4. Schedules fix + supervisor dashboard — 2–3 days
+1. [x] Hotfixes from 2.6.1 that overlap (sort bug, name bug, audit stamps, resolve notification) — **shipped 2026-06-10**
+2. [x] Submit form V2 (search-or-type issue picker, browse-by-group, duplicate guard, impact chips, camera capture, photo-optional description, in-page confirmation with ticket ref, My Reports list on the staff page) — **shipped 2026-06-10**
+3. [x] Queue V2 (My Jobs / Open Pool / All Active tabs, clickable stat cards, reporter name + description preview + building + aging chips on cards, duplicate grouping with per-row Mark-duplicate, walk-order grouping, claim with auto displayName, no more typed technician name, 7-day Reopen, detail-modal timeline, scheduled-tasks card via hook with computed due dates) — **shipped 2026-06-10**
+4. [x] Schedules fix — **shipped 2026-06-10**. [ ] Supervisor mini-dashboard — remaining.
+
+**Deviations from the original spec (conscious):**
+- No separate `assigned` status — Claim = Start (`open → in_progress`); a small team doesn't need the extra state. Revisit if the team grows.
+- `cancelled` status not added yet (only `duplicate`); admin delete still covers the rare cancel case.
+- Notes thread (multi-note timeline) deferred — detail modal shows the status timeline; `adminNotes` remains a single field.
 
 **Out of scope for V2:** asset register/QR codes (Phase 5 #8), offline PWA drafts (Phase 3), parts inventory, vendor management.
 

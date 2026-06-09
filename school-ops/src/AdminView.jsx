@@ -7,6 +7,8 @@ import { resolveBalances, debitLeave } from './hr/leave';
 import { useUsers } from './data/useUsers';
 import { useScheduledTasks } from './data/useScheduledTasks';
 import { useLeaveRequests } from './data/useLeaveRequests';
+import { auditUpdate } from './data/audit';
+import { getTimeOpen, computeScheduleDue } from './maintenance/ticketUtils';
 import {
   ShieldAlert, AlertTriangle, CheckCircle, Clock, Plus, ChevronDown,
   MapPin, User, FileText, Camera, X, Trash2, Pause, Play, RefreshCw,
@@ -20,9 +22,10 @@ const StatusBadge = ({ status }) => {
   const styles = {
     open: "bg-red-50 text-red-700 border-red-100",
     in_progress: "bg-amber-50 text-amber-700 border-amber-100",
-    resolved: "bg-emerald-50 text-emerald-700 border-emerald-100"
+    resolved: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    duplicate: "bg-slate-100 text-slate-500 border-slate-200"
   };
-  const labels = { open: 'Open', in_progress: 'In Progress', resolved: 'Resolved' };
+  const labels = { open: 'Open', in_progress: 'In Progress', resolved: 'Resolved', duplicate: 'Duplicate' };
 
   return (
     <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${styles[status] || styles.open}`}>
@@ -270,7 +273,11 @@ export default function AdminView({
   // Subscriptions push fresh data automatically.
   const fetchData = () => {};
 
-  const ticketStats = tickets.reduce((a, t) => {
+  // Tickets merged as duplicates are hidden from admin oversight entirely —
+  // excluded from both the stat cards and the table below.
+  const visibleTickets = tickets.filter(t => t.status !== 'duplicate');
+
+  const ticketStats = visibleTickets.reduce((a, t) => {
     if (t.priority === 'critical' && t.status !== 'resolved') a.critical++;
     if (t.status === 'open') a.backlog++;
     if (t.status === 'in_progress') a.inProgress++;
@@ -279,7 +286,7 @@ export default function AdminView({
   }, { critical: 0, backlog: 0, inProgress: 0, resolved: 0 });
 
   // --- FILTERED TICKETS based on stat card selection ---
-  const filteredTickets = tickets.filter(t => {
+  const filteredTickets = visibleTickets.filter(t => {
     if (ticketFilter === 'all') return true;
     if (ticketFilter === 'critical') return t.priority === 'critical' && t.status !== 'resolved';
     if (ticketFilter === 'open') return t.status === 'open';
@@ -288,33 +295,9 @@ export default function AdminView({
     return true;
   });
 
-  // --- TIME TRACKING / SLA Helper ---
-  const getTimeOpen = (createdAt) => {
-    if (!createdAt) return { text: 'N/A', color: 'text-slate-400', urgent: false };
-    const created = createdAt instanceof Date ? createdAt : (createdAt.toDate ? createdAt.toDate() : new Date(createdAt));
-    const now = new Date();
-    const diffMs = now - created;
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffHours / 24);
-    
-    let text, color, urgent = false;
-    if (diffDays > 0) {
-      text = `${diffDays}d ${diffHours % 24}h`;
-    } else {
-      text = `${diffHours}h`;
-    }
-    
-    // SLA color coding: <24h = green, 24-48h = yellow, >48h = red
-    if (diffHours < 24) { color = 'text-emerald-600 bg-emerald-50'; }
-    else if (diffHours < 48) { color = 'text-amber-600 bg-amber-50'; }
-    else { color = 'text-red-600 bg-red-50'; urgent = true; }
-    
-    return { text, color, urgent };
-  };
-
   // --- EXPORT TO CSV ---
   const exportToCSV = () => {
-    const dataToExport = ticketFilter === 'all' ? tickets : filteredTickets;
+    const dataToExport = ticketFilter === 'all' ? visibleTickets : filteredTickets;
     const headers = ['Category', 'Location', 'Priority', 'Status', 'Reported', 'Description', 'Admin Notes'];
     const rows = dataToExport.map(t => [
       t.category || '',
@@ -337,10 +320,11 @@ export default function AdminView({
   // --- QUICK NOTE SAVE ---
   const saveQuickNote = async (ticketId, note) => {
     try {
-      await updateDoc(doc(db, 'maintenance_tickets', ticketId), { 
+      await updateDoc(doc(db, 'maintenance_tickets', ticketId), {
         adminNotes: note,
         lastNoteBy: userData?.email || user?.uid,
-        lastNoteAt: serverTimestamp()
+        lastNoteAt: serverTimestamp(),
+        ...auditUpdate(user.uid)
       });
       setQuickNote(prev => ({ ...prev, [ticketId]: '' }));
     } catch (e) {
@@ -372,10 +356,12 @@ export default function AdminView({
     
     try {
       for (const id of selectedTickets) {
-        await updateDoc(doc(db, 'maintenance_tickets', id), { 
+        await updateDoc(doc(db, 'maintenance_tickets', id), {
           status: 'resolved',
           resolvedAt: serverTimestamp(),
-          resolvedBy: userData?.email || 'Admin'
+          resolvedBy: userData?.displayName || userData?.email || 'Admin',
+          resolvedByUid: user.uid,
+          ...auditUpdate(user.uid)
         });
       }
       setSelectedTickets([]);
@@ -515,16 +501,18 @@ export default function AdminView({
       if (currentPriority === 'critical') {
         // De-escalate: Revert to original priority
         const revertTo = originalPriority || 'medium';
-        await updateDoc(doc(db, 'maintenance_tickets', ticketId), { 
-          priority: revertTo, 
-          escalated: false 
+        await updateDoc(doc(db, 'maintenance_tickets', ticketId), {
+          priority: revertTo,
+          escalated: false,
+          ...auditUpdate(user.uid)
         });
       } else {
         // Escalate: Save original and set to critical
-        await updateDoc(doc(db, 'maintenance_tickets', ticketId), { 
-          priority: 'critical', 
+        await updateDoc(doc(db, 'maintenance_tickets', ticketId), {
+          priority: 'critical',
           originalPriority: currentPriority, // Save original for reverting
-          escalated: true 
+          escalated: true,
+          ...auditUpdate(user.uid)
         });
       }
     } catch (e) {
@@ -598,7 +586,7 @@ export default function AdminView({
                 </button>
               )}
               <span className="text-sm text-slate-500">
-                Showing <strong>{filteredTickets.length}</strong> of {tickets.length} tickets
+                Showing <strong>{filteredTickets.length}</strong> of {visibleTickets.length} tickets
               </span>
             </div>
             
@@ -654,7 +642,9 @@ export default function AdminView({
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredTickets.map((t) => {
-                    const timeOpen = t.status !== 'resolved' ? getTimeOpen(t.createdAt) : null;
+                    const timeOpen = t.status !== 'resolved'
+                      ? getTimeOpen(t.createdAt instanceof Date ? t.createdAt : null)
+                      : null;
                     return (
                       <tr key={t.id} className={`hover:bg-slate-50/50 transition-colors ${selectedTickets.includes(t.id) ? 'bg-indigo-50/30' : ''}`}>
                         <td className="px-3 py-4">
@@ -675,6 +665,9 @@ export default function AdminView({
                           <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
                             <span className="flex items-center gap-1"><MapPin size={12}/> {t.location}</span>
                             <PriorityBadge priority={t.priority} />
+                          </p>
+                          <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1">
+                            <User size={12}/> by {t.reporterName || 'Anonymous'}
                           </p>
                         </td>
                         <td className="px-4 py-4 text-center">
@@ -943,16 +936,19 @@ export default function AdminView({
                     <span className="flex items-center gap-1"><RefreshCw size={12}/> Every {s.frequencyDays} days</span>
                     <span className="flex items-center gap-1"><MapPin size={12}/> {s.locations?.length} locations</span>
                     {(() => {
-                      const last = s.lastRun instanceof Date ? s.lastRun : s.lastRun?.toDate?.();
-                      const next = s.nextRun instanceof Date ? s.nextRun : s.nextRun?.toDate?.();
+                      // lastRun/nextRun arrive as JS Dates via useScheduledTasks;
+                      // computeScheduleDue also handles legacy ISO-string startDate.
+                      const last = s.lastRun instanceof Date ? s.lastRun : null;
+                      const due = computeScheduleDue(s);
+                      const pastDue = due ? due.getTime() <= Date.now() : false;
                       return (
                         <>
                           <span className="flex items-center gap-1" title={last?.toLocaleString() || 'Never run'}>
                             <Clock size={12}/> Last: {last ? last.toLocaleDateString() : 'never'}
                           </span>
                           {s.isActive && (
-                            <span className="flex items-center gap-1 text-indigo-600" title={next?.toLocaleString() || 'Pending first run'}>
-                              <Clock size={12}/> Next: {next ? next.toLocaleDateString() : 'pending'}
+                            <span className={`flex items-center gap-1 ${pastDue ? 'text-red-600 font-semibold' : 'text-indigo-600'}`} title={due?.toLocaleString() || 'Pending first run'}>
+                              <Clock size={12}/> {pastDue ? 'Due now' : `Next: ${due ? due.toLocaleDateString() : 'pending'}`}
                             </span>
                           )}
                         </>
@@ -962,7 +958,7 @@ export default function AdminView({
                 </div>
                 <div className="flex gap-2">
                    <button
-                     onClick={async () => { await updateDoc(doc(db, 'scheduled_tasks', s.id), { isActive: !s.isActive }); fetchData(); }}
+                     onClick={async () => { await updateDoc(doc(db, 'scheduled_tasks', s.id), { isActive: !s.isActive, ...auditUpdate(user.uid) }); fetchData(); }}
                      className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600"
                    >
                      {s.isActive ? <Pause size={16} /> : <Play size={16} />}

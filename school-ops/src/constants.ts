@@ -50,8 +50,123 @@ export type LocationName = (typeof LOCATIONS)[number];
 export const PRIORITIES = ["low", "medium", "high", "critical"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
-export const TICKET_STATUSES = ["open", "in_progress", "resolved"] as const;
+export const TICKET_STATUSES = ["open", "in_progress", "resolved", "duplicate"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
+
+// Two-level category taxonomy (Phase 2.8). Every legacy ISSUE_CATEGORIES
+// string appears in exactly one group so old tickets resolve to a group.
+// New report UI picks group -> item; old flat strings remain valid.
+export const CATEGORY_GROUPS = [
+  {
+    key: "climate",
+    label: "AC & Climate",
+    items: [
+      "Air conditioners not cooling properly",
+      "AC hose",
+      "AC noise or vibration",
+      "Thermostat or AC remote not working",
+    ],
+  },
+  {
+    key: "electrical",
+    label: "Electrical & Lighting",
+    items: [
+      "Lights not working",
+      "Damaged electrical sockets",
+      "Exposed wiring or electrical hazard",
+      "Fan not working",
+    ],
+  },
+  {
+    key: "plumbing",
+    label: "Plumbing & Water",
+    items: [
+      "Water leakage (AC or ceiling)",
+      "Water coolers",
+      "Toilet or bathroom issue",
+      "Blocked drain",
+      "Low water pressure",
+    ],
+  },
+  {
+    key: "furniture",
+    label: "Furniture & Fittings",
+    items: [
+      "Broken furniture (chairs, tables, shelves)",
+      "Benches",
+      "Broken blinds or curtains",
+      "Broken or loose door handles",
+      "Clock",
+      "Missing or damaged classroom supplies",
+    ],
+  },
+  {
+    key: "building",
+    label: "Building & Finishes",
+    items: [
+      "Peeling paint or damaged walls",
+      "Loose or hanging ceiling tiles",
+      "Staircases anti slip/yellow tape",
+      "Rubber/soft mat",
+      "Iron Fences",
+      "Canopy",
+      "Window or glass damage",
+      "Door or lock problem",
+    ],
+  },
+  {
+    key: "technology",
+    label: "Technology",
+    items: [
+      "Smartboard not functioning",
+      "Projector issue",
+      "Computer or printer issue",
+      "Internet or network problem",
+      "PA system or school bell issue",
+    ],
+  },
+  {
+    key: "cleaning",
+    label: "Cleaning & Hygiene",
+    items: [
+      "Dirty or unclean areas",
+      "Unpleasant odors",
+      "Presence of insects or pests",
+      "Waste removal needed",
+    ],
+  },
+  {
+    key: "grounds",
+    label: "Grounds & Outdoor",
+    items: [
+      "Artificial green grass",
+      "Tree branches",
+      "Playground equipment",
+    ],
+  },
+  {
+    key: "safety",
+    label: "Safety Hazard",
+    items: ["Safety Hazard (General)"],
+  },
+  {
+    key: "other",
+    label: "Other",
+    items: ["Others"],
+  },
+] as const;
+
+export type CategoryGroupKey = (typeof CATEGORY_GROUPS)[number]["key"];
+
+// Reporter-facing severity hints that map to ticket priority (Phase 2.8).
+export const IMPACT_LEVELS = [
+  { key: "safety", label: "Safety risk", hint: "Someone could get hurt", priority: "high" },
+  { key: "blocking", label: "Blocks teaching / work", hint: "A class or task cannot proceed", priority: "high" },
+  { key: "annoying", label: "Disruptive but manageable", hint: "Works partially or workaround exists", priority: "medium" },
+  { key: "cosmetic", label: "Cosmetic / minor", hint: "Looks bad, nothing blocked", priority: "low" },
+] as const;
+
+export type ImpactKey = (typeof IMPACT_LEVELS)[number]["key"];
 
 // ============================================================================
 // ROLES & USER STATUS

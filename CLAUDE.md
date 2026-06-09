@@ -164,7 +164,7 @@ The data model stays in separate Firestore collections. Unification happens at t
 | `insuranceProvider`, `insurancePolicyNumber` | string | self |
 
 ### `maintenance_tickets/{id}`
-Existing schema is fine — see [school-ops/README.md](school-ops/README.md). Add `updatedBy`/`updatedAt` audit fields on every status change.
+Existing schema is fine — see [school-ops/README.md](school-ops/README.md). Add `updatedBy`/`updatedAt` audit fields on every status change. Phase 2.8 adds additive optional fields — `categoryGroup`, `impact`, `assignedToUid`/`assignedToName`, `resolvedByUid`, `duplicateOf`, reopen tracking (`reopenedAt`, `reopenCount`), and the new status value `'duplicate'` — which legacy tickets lack, so all readers must tolerate their absence.
 
 ### `leave_requests/{id}`
 Existing schema is fine. Every status change writes to `audit_log`.
@@ -261,6 +261,8 @@ The role hierarchy is **`super_admin` > `admin` > `hr` ≈ `maintenance` ≈ `st
 | Read school_settings | – | – | ✓ | ✓ | ✓ |
 | Edit school_settings | – | – | – | – | ✓ |
 | Impersonate / "log in as" another user | – | – | – | – | ✓ (audit-logged) |
+
+> **Ticket-read footnote.** At the data layer, `maintenance_tickets` reads are allowed for ALL authenticated users (including anonymous kiosk reporters) — required by the submit form's duplicate-report guard and the My Reports list. UI visibility of ticket lists still follows the Tickets rows above.
 
 **Rules of thumb:**
 - **HR** is everything an `admin` does for non-admin people. Cannot touch `admin` or `super_admin` rows at all.

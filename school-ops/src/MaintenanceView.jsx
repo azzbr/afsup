@@ -1,12 +1,27 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { updateDoc, doc, serverTimestamp, collection, onSnapshot } from 'firebase/firestore';
+import React, { useState, useMemo } from 'react';
+import { updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from './firebase';
 import {
-  Wrench, X, CheckCircle, MapPin, Clock, User, Camera, Calendar, RefreshCw, 
-  AlertTriangle, Search, Filter, SortAsc, SortDesc, ChevronDown, ChevronUp,
-  Play, Zap, History, AlertCircle, Loader2
+  Wrench, X, CheckCircle, MapPin, Clock, User, Camera, Calendar, RefreshCw,
+  AlertTriangle, Search, ChevronDown, ChevronUp, Play, Zap, History,
+  AlertCircle, Copy, Building2, List, RotateCcw
 } from 'lucide-react';
 import { compressImage, uploadImage } from './storage';
+import { auditUpdate } from './data/audit';
+import { useScheduledTasks } from './data/useScheduledTasks';
+import {
+  getTimeOpen, buildingOf, BUILDING_LABELS, groupDuplicateTickets,
+  computeScheduleDue, ticketSorters
+} from './maintenance/ticketUtils';
+
+const BUILDING_ORDER = ['B3', 'B4', 'B5', 'Admin', 'Other'];
+const REOPEN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+const TABS = [
+  { key: 'my', label: 'My Jobs' },
+  { key: 'pool', label: 'Open Pool' },
+  { key: 'all', label: 'All Active' },
+];
 
 // ============================================================================
 // STATUS BADGE (HR-Style with Icons)
@@ -15,11 +30,12 @@ const StatusBadge = ({ status }) => {
   const config = {
     open: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', icon: AlertCircle, label: 'Open' },
     in_progress: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', icon: Clock, label: 'In Progress' },
-    resolved: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', icon: CheckCircle, label: 'Resolved' }
+    resolved: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', icon: CheckCircle, label: 'Resolved' },
+    duplicate: { bg: 'bg-slate-100', text: 'text-slate-500', border: 'border-slate-200', icon: Copy, label: 'Duplicate' }
   };
   const style = config[status] || config.open;
   const Icon = style.icon;
-  
+
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${style.bg} ${style.text} ${style.border}`}>
       <Icon size={12} />
@@ -39,7 +55,7 @@ const PriorityBadge = ({ priority }) => {
     critical: { bg: 'bg-red-600', text: 'text-white', border: 'border-red-700', pulse: true }
   };
   const style = config[priority] || config.medium;
-  
+
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border ${style.bg} ${style.text} ${style.border} ${style.pulse ? 'animate-pulse' : ''}`}>
       {priority === 'critical' && <AlertTriangle size={10} />}
@@ -49,23 +65,65 @@ const PriorityBadge = ({ priority }) => {
 };
 
 // ============================================================================
-// QUICK STATS CARD
+// AGING CHIP (time-open, color-coded from getTimeOpen)
 // ============================================================================
-const StatCard = ({ icon: Icon, label, count, colorClass, borderColor }) => (
-  <div className={`${colorClass} rounded-xl p-4 border ${borderColor} transition-transform hover:scale-105`}>
+const AgingChip = ({ createdAt }) => {
+  const age = getTimeOpen(createdAt);
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold ${age.color}`}>
+      <Clock size={10} /> {age.text}
+    </span>
+  );
+};
+
+// ============================================================================
+// QUICK STATS CARD (clickable)
+// ============================================================================
+const StatCard = ({ icon: Icon, label, count, colorClass, borderColor, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`${colorClass} rounded-xl p-4 border ${borderColor} transition-transform hover:scale-105 text-left cursor-pointer`}
+  >
     <div className="flex items-center justify-between">
       <Icon size={20} className="opacity-70" />
       <span className="text-2xl font-bold">{count}</span>
     </div>
     <p className="text-xs font-medium mt-1 opacity-80">{label}</p>
-  </div>
+  </button>
 );
+
+// --- Helpers ---
+
+const fmtDateTime = (d) => (d instanceof Date ? d.toLocaleString() : 'N/A');
+const fmtDate = (d) => (d instanceof Date ? d.toLocaleDateString() : 'N/A');
+
+const descriptionPreview = (text) => {
+  if (!text) return '';
+  return text.length > 90 ? text.slice(0, 90).trimEnd() + '...' : text;
+};
 
 // --- Modals ---
 
-function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName, getTimeElapsed }) {
+function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName }) {
   const [selectedImage, setSelectedImage] = useState(null);
   if (!isOpen || !ticket) return null;
+
+  const reporter = ticket.reporterName || (ticket.submittedBy ? getDisplayName(ticket.submittedBy) : 'Anonymous');
+  const timeline = [
+    ticket.createdAt instanceof Date && {
+      icon: AlertCircle, color: 'text-red-500 bg-red-50 border-red-100',
+      label: 'Reported', detail: `by ${reporter}`, at: ticket.createdAt,
+    },
+    ticket.startedAt instanceof Date && {
+      icon: Play, color: 'text-amber-600 bg-amber-50 border-amber-100',
+      label: 'Started', detail: (ticket.assignedToName || ticket.startedByName) ? `with ${ticket.assignedToName || ticket.startedByName}` : '', at: ticket.startedAt,
+    },
+    ticket.resolvedAt instanceof Date && {
+      icon: CheckCircle, color: 'text-emerald-600 bg-emerald-50 border-emerald-100',
+      label: 'Resolved', detail: ticket.resolvedBy ? `by ${ticket.resolvedBy}` : '', at: ticket.resolvedAt,
+    },
+  ].filter(Boolean);
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -95,7 +153,13 @@ function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName, getTimeEla
                <p className="text-xs text-slate-400 uppercase font-semibold mb-1">Reported By</p>
                <div className="flex items-center gap-2 text-slate-700 font-medium">
                  <User size={14} className="text-indigo-500" />
-                 {ticket.submittedBy ? getDisplayName(ticket.submittedBy) : ticket.reporterName || 'Anonymous'}
+                 {reporter}
+               </div>
+             </div>
+             <div className="col-span-2">
+               <p className="text-xs text-slate-400 uppercase font-semibold mb-1">Created</p>
+               <div className="flex items-center gap-2 text-slate-700 font-medium">
+                 <Calendar size={14} className="text-indigo-500" /> {fmtDateTime(ticket.createdAt)}
                </div>
              </div>
            </div>
@@ -104,6 +168,31 @@ function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName, getTimeEla
              <p className="text-xs text-slate-400 uppercase font-semibold mb-1">Description</p>
              <p className="text-slate-700 text-sm whitespace-pre-wrap">{ticket.description}</p>
            </div>
+
+           {timeline.length > 0 && (
+             <div>
+               <p className="text-xs text-slate-400 uppercase font-semibold mb-2">Timeline</p>
+               <div className="space-y-2">
+                 {timeline.map((stage, i) => {
+                   const Icon = stage.icon;
+                   return (
+                     <div key={i} className="flex items-center gap-3">
+                       <span className={`p-1.5 rounded-full border ${stage.color}`}>
+                         <Icon size={12} />
+                       </span>
+                       <div className="flex-1 min-w-0">
+                         <p className="text-sm font-medium text-slate-700">
+                           {stage.label}
+                           {stage.detail && <span className="text-slate-500 font-normal"> {stage.detail}</span>}
+                         </p>
+                       </div>
+                       <span className="text-xs text-slate-400 whitespace-nowrap">{fmtDateTime(stage.at)}</span>
+                     </div>
+                   );
+                 })}
+               </div>
+             </div>
+           )}
 
            {ticket.imageUrls?.length > 0 && (
              <div>
@@ -119,6 +208,30 @@ function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName, getTimeEla
                    />
                  ))}
                </div>
+             </div>
+           )}
+
+           {ticket.completionImageUrls?.length > 0 && (
+             <div>
+               <p className="text-xs text-slate-400 uppercase font-semibold mb-2 flex items-center gap-1">
+                 <CheckCircle size={12} /> Completion Photos
+               </p>
+               <div className="grid grid-cols-3 gap-2">
+                 {ticket.completionImageUrls.map((url, i) => (
+                   <img
+                     key={i} src={url} alt="Completion proof"
+                     className="h-16 w-full object-cover rounded-lg border border-slate-200 cursor-pointer hover:opacity-80"
+                     onClick={() => setSelectedImage(url)}
+                   />
+                 ))}
+               </div>
+             </div>
+           )}
+
+           {ticket.completionNotes && (
+             <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100">
+               <p className="text-xs text-emerald-600 uppercase font-semibold mb-1">Completion Notes</p>
+               <p className="text-slate-700 text-sm whitespace-pre-wrap">{ticket.completionNotes}</p>
              </div>
            )}
         </div>
@@ -140,8 +253,7 @@ function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName, getTimeEla
   );
 }
 
-function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
-  const [technicianName, setTechnicianName] = useState('');
+function CompletionModal({ isOpen, onClose, ticket, onComplete, technicianName }) {
   const [completionNotes, setCompletionNotes] = useState('');
   const [completionFiles, setCompletionFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -159,7 +271,6 @@ function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
   };
 
   const handleSubmit = async () => {
-    if (!technicianName.trim()) return alert("Enter your name.");
     setSubmitting(true);
     try {
       let imageUrls = [];
@@ -173,7 +284,9 @@ function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
         setUploading(false);
         imageUrls = urls;
       }
-      await onComplete(ticket.id, technicianName.trim(), completionNotes.trim(), imageUrls);
+      await onComplete(ticket.id, completionNotes.trim(), imageUrls);
+      setCompletionNotes('');
+      setCompletionFiles([]);
       onClose();
     } catch (e) { alert("Failed to complete."); } finally { setSubmitting(false); }
   };
@@ -183,18 +296,11 @@ function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
-        <h3 className="text-lg font-bold text-slate-800 mb-4">Complete Task</h3>
+        <h3 className="text-lg font-bold text-slate-800 mb-1">Complete Task</h3>
+        <p className="text-sm text-slate-500 mb-4 flex items-center gap-1.5">
+          <User size={14} className="text-indigo-500" /> Completing as <span className="font-semibold text-slate-700">{technicianName}</span>
+        </p>
         <div className="space-y-4">
-          <div>
-            <label className="text-sm font-medium text-slate-700">Technician Name *</label>
-            <input
-              type="text"
-              className="w-full mt-1 p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
-              value={technicianName}
-              onChange={e => setTechnicianName(e.target.value)}
-              placeholder="Who fixed this?"
-            />
-          </div>
           <div>
             <label className="text-sm font-medium text-slate-700">Notes</label>
             <textarea
@@ -218,33 +324,177 @@ function CompletionModal({ isOpen, onClose, ticket, onComplete }) {
                ))}
              </div>
           </div>
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || uploading}
-            className="w-full py-2.5 bg-emerald-600 text-white rounded-xl font-medium shadow-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            {(submitting || uploading) ? (
-              <>
-                {uploading ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    Uploading Photos...
-                  </>
-                ) : (
-                  <>
-                    Completing...
-                  </>
-                )}
-              </>
-            ) : (
-              <>
-                <CheckCircle size={18} />
-                Mark as Resolved
-              </>
-            )}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              disabled={submitting || uploading}
+              className="px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={submitting || uploading}
+              className="flex-1 py-2.5 bg-emerald-600 text-white rounded-xl font-medium shadow-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {(submitting || uploading) ? (
+                <>
+                  {uploading ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Uploading Photos...
+                    </>
+                  ) : (
+                    <>
+                      Completing...
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  <CheckCircle size={18} />
+                  Mark as Resolved
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// TICKET ROW (primary card + optional expandable duplicate sub-list)
+// ============================================================================
+
+function TicketRow({ entry, expanded, onToggleExpand, onOpenDetail, onStart, onQuickFix, onMarkDone, onMarkDuplicate }) {
+  const ticket = entry.primary;
+  const duplicates = entry.duplicates;
+  const reportCount = duplicates.length + 1;
+  const workingWith = ticket.assignedToName || ticket.startedByName;
+
+  return (
+    <div>
+      <div className="p-4 hover:bg-slate-50 transition-all duration-200 group cursor-pointer border-l-4 border-transparent hover:border-indigo-500">
+        <div className="flex flex-col md:flex-row gap-3 items-start md:items-center">
+          <div className="flex-1 min-w-0 w-full" onClick={() => onOpenDetail(ticket)}>
+            {/* Line 1: category + photo chip + duplicate-count chip */}
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <span className="font-semibold text-slate-800 group-hover:text-indigo-700 transition-colors">
+                {ticket.category}
+              </span>
+              {ticket.imageUrls?.length > 0 && (
+                <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-500 flex items-center gap-1">
+                  <Camera size={10} /> {ticket.imageUrls.length}
+                </span>
+              )}
+              {duplicates.length > 0 && (
+                <button
+                  type="button"
+                  title={`${reportCount} reports of this issue`}
+                  onClick={(e) => { e.stopPropagation(); onToggleExpand(ticket.id); }}
+                  className="bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 hover:bg-amber-200 transition-colors"
+                >
+                  <Copy size={10} /> x{reportCount}
+                  {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                </button>
+              )}
+            </div>
+
+            {/* Line 2: description preview */}
+            {ticket.description && (
+              <p className="text-xs text-slate-500 truncate mb-1.5">
+                {descriptionPreview(ticket.description)}
+              </p>
+            )}
+
+            {/* Line 3: location + building + reporter + aging + priority */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-500">
+              <span className="flex items-center gap-1">
+                <MapPin size={12} className="text-slate-400" /> {ticket.location}
+              </span>
+              <span className="bg-slate-100 border border-slate-200 text-slate-500 px-1.5 py-0.5 rounded text-[10px] font-semibold">
+                {buildingOf(ticket.location || '')}
+              </span>
+              <span className="flex items-center gap-1">
+                <User size={12} className="text-slate-400" /> by {ticket.reporterName || 'Anonymous'}
+              </span>
+              <AgingChip createdAt={ticket.createdAt} />
+              <PriorityBadge priority={ticket.priority} />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+            <div className="flex flex-col items-end gap-1">
+              <StatusBadge status={ticket.status} />
+              {ticket.status === 'in_progress' && workingWith && (
+                <span className="text-[10px] text-slate-500">
+                  with {workingWith}
+                </span>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              {ticket.status === 'open' && (
+                <>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onStart(ticket.id); }}
+                    className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 flex items-center gap-1 transition-colors"
+                  >
+                    <Play size={12} /> Start
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onQuickFix(ticket); }}
+                    className="px-3 py-1.5 border border-emerald-500 text-emerald-600 rounded-lg text-xs font-bold hover:bg-emerald-50 flex items-center gap-1 transition-colors"
+                  >
+                    <Zap size={12} /> Quick Fix
+                  </button>
+                </>
+              )}
+              {ticket.status === 'in_progress' && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onMarkDone(ticket); }}
+                  className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1 transition-colors"
+                >
+                  <CheckCircle size={12} /> Mark Done
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded duplicate sub-list */}
+      {expanded && duplicates.length > 0 && (
+        <div className="bg-amber-50/40 border-t border-amber-100">
+          {duplicates.map(dup => (
+            <div
+              key={dup.id}
+              className="pl-8 md:pl-12 pr-4 py-3 border-b border-amber-100 last:border-b-0 flex flex-col sm:flex-row sm:items-center gap-2 justify-between cursor-pointer hover:bg-amber-50"
+              onClick={() => onOpenDetail(dup)}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-slate-600 truncate">
+                  {descriptionPreview(dup.description) || dup.category}
+                </p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px] text-slate-500">
+                  <span className="flex items-center gap-1">
+                    <User size={10} className="text-slate-400" /> by {dup.reporterName || 'Anonymous'}
+                  </span>
+                  <AgingChip createdAt={dup.createdAt} />
+                </div>
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); onMarkDuplicate(dup, ticket); }}
+                className="px-3 py-1.5 border border-amber-300 text-amber-700 rounded-lg text-xs font-bold hover:bg-amber-100 flex items-center gap-1 transition-colors w-fit"
+              >
+                <Copy size={12} /> Mark duplicate
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -259,75 +509,125 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [detailTicket, setDetailTicket] = useState(null);
-  const [scheduledTasks, setScheduledTasks] = useState([]);
-  
-  // Search, Filter, Sort States
+
+  // Tabs / Search / Filter / Sort States
+  const [tabChoice, setTabChoice] = useState(null); // null = auto default
+  const [statusView, setStatusView] = useState('all'); // 'all' | 'in_progress' (All Active tab only)
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('newest');
+  const [sortBy, setSortBy] = useState('urgent');
+  const [groupByBuilding, setGroupByBuilding] = useState(false);
   const [showResolvedHistory, setShowResolvedHistory] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState(() => new Set());
 
-  // Calculate Stats
-  const stats = useMemo(() => {
-    const open = tickets.filter(t => t.status === 'open').length;
-    const inProgress = tickets.filter(t => t.status === 'in_progress').length;
-    const resolved = tickets.filter(t => t.status === 'resolved').length;
-    const critical = tickets.filter(t => t.priority === 'critical' && t.status !== 'resolved').length;
-    return { open, inProgress, resolved, critical };
-  }, [tickets]);
+  // Technician display name (used for claim + completion writes)
+  const techDisplayName = userData?.displayName || userData?.firstName || userData?.email?.split('@')[0] || 'Technician';
 
-  // Filter and Sort Tickets
-  const filteredTickets = useMemo(() => {
-    let result = tickets.filter(t => t.status !== 'resolved');
-    
-    // Apply search
+  // Active = open or in_progress. Excludes 'resolved' AND 'duplicate'.
+  const activeTickets = useMemo(
+    () => tickets.filter(t => t.status === 'open' || t.status === 'in_progress'),
+    [tickets]
+  );
+
+  const myJobs = useMemo(
+    () => activeTickets.filter(t =>
+      t.status === 'in_progress' &&
+      (t.assignedToUid === user?.uid || (userData?.email && t.assignedTo === userData.email))
+    ),
+    [activeTickets, user?.uid, userData?.email]
+  );
+
+  const poolTickets = useMemo(
+    () => activeTickets.filter(t => t.status === 'open'),
+    [activeTickets]
+  );
+
+  // Default tab: My Jobs if it has items, else Open Pool.
+  const activeTab = tabChoice ?? (myJobs.length > 0 ? 'my' : 'pool');
+
+  const selectTab = (key) => {
+    setTabChoice(key);
+    setStatusView('all');
+  };
+
+  // Calculate Stats (duplicates excluded everywhere)
+  const stats = useMemo(() => ({
+    open: poolTickets.length,
+    inProgress: activeTickets.filter(t => t.status === 'in_progress').length,
+    resolved: tickets.filter(t => t.status === 'resolved').length,
+    critical: activeTickets.filter(t => t.priority === 'critical').length,
+  }), [tickets, activeTickets, poolTickets]);
+
+  const tabCounts = { my: myJobs.length, pool: poolTickets.length, all: activeTickets.length };
+
+  // Filter + sort pipeline for the current tab
+  const visibleTickets = useMemo(() => {
+    let result = activeTab === 'my' ? myJobs : activeTab === 'pool' ? poolTickets : activeTickets;
+
+    if (activeTab === 'all' && statusView === 'in_progress') {
+      result = result.filter(t => t.status === 'in_progress');
+    }
+
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      result = result.filter(t => 
+      result = result.filter(t =>
         t.category?.toLowerCase().includes(query) ||
         t.location?.toLowerCase().includes(query) ||
-        t.description?.toLowerCase().includes(query)
+        t.description?.toLowerCase().includes(query) ||
+        t.reporterName?.toLowerCase().includes(query)
       );
     }
-    
-    // Apply priority filter
+
     if (priorityFilter !== 'all') {
       result = result.filter(t => t.priority === priorityFilter);
     }
-    
-    // Apply sorting
-    result.sort((a, b) => {
-      if (sortBy === 'newest') {
-        return (b.createdAt?.toDate?.() || new Date()) - (a.createdAt?.toDate?.() || new Date());
-      } else if (sortBy === 'oldest') {
-        return (a.createdAt?.toDate?.() || new Date()) - (b.createdAt?.toDate?.() || new Date());
-      } else if (sortBy === 'priority') {
-        const order = { critical: 0, high: 1, medium: 2, low: 3 };
-        return (order[a.priority] || 4) - (order[b.priority] || 4);
-      }
-      return 0;
-    });
-    
-    return result;
-  }, [tickets, searchQuery, priorityFilter, sortBy]);
 
-  // Resolved tickets for history
+    return [...result].sort(ticketSorters[sortBy] || ticketSorters.urgent);
+  }, [activeTab, myJobs, poolTickets, activeTickets, statusView, searchQuery, priorityFilter, sortBy]);
+
+  // Duplicate grouping (Open Pool + All Active only)
+  const groupedTickets = useMemo(() => {
+    if (activeTab === 'my') return visibleTickets.map(t => ({ primary: t, duplicates: [] }));
+    return groupDuplicateTickets(visibleTickets);
+  }, [visibleTickets, activeTab]);
+
+  // Walk-order sections (already sorted upstream, so each section keeps the sorter order)
+  const buildingSections = useMemo(() => {
+    if (!groupByBuilding) return null;
+    const byBuilding = new Map();
+    for (const entry of groupedTickets) {
+      const key = buildingOf(entry.primary.location || '');
+      if (!byBuilding.has(key)) byBuilding.set(key, []);
+      byBuilding.get(key).push(entry);
+    }
+    return BUILDING_ORDER
+      .filter(key => byBuilding.has(key))
+      .map(key => ({ key, label: BUILDING_LABELS[key], entries: byBuilding.get(key) }));
+  }, [groupedTickets, groupByBuilding]);
+
+  // Resolved tickets for history (resolvedAt is a JS Date)
   const resolvedTickets = useMemo(() => {
     return tickets
       .filter(t => t.status === 'resolved')
-      .sort((a, b) => (b.resolvedAt?.toDate?.() || new Date()) - (a.resolvedAt?.toDate?.() || new Date()))
+      .sort((a, b) => {
+        const at = a.resolvedAt instanceof Date ? a.resolvedAt.getTime() : 0;
+        const bt = b.resolvedAt instanceof Date ? b.resolvedAt.getTime() : 0;
+        return bt - at;
+      })
       .slice(0, 10);
   }, [tickets]);
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'scheduled_tasks'), (snap) => {
-      const scheduled = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .filter(t => t.isActive !== false)
-        .sort((a, b) => (a.nextRun?.toDate?.() || new Date()) - (b.nextRun?.toDate?.() || new Date()));
-      setScheduledTasks(scheduled);
-    });
-    return () => unsub();
-  }, []);
+  // Scheduled tasks via the shared hook (no component-local onSnapshot)
+  const { data: scheduledTasksRaw } = useScheduledTasks();
+  const scheduledTasks = useMemo(() => {
+    return (scheduledTasksRaw ?? [])
+      .filter(t => t.isActive !== false)
+      .map(task => ({ task, due: computeScheduleDue(task) }))
+      .sort((a, b) =>
+        (a.due ? a.due.getTime() : Number.POSITIVE_INFINITY) -
+        (b.due ? b.due.getTime() : Number.POSITIVE_INFINITY)
+      );
+  }, [scheduledTasksRaw]);
 
   const getDisplayName = (email) => {
     if (!email) return 'Unknown';
@@ -335,14 +635,18 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
     return name.charAt(0).toUpperCase() + name.slice(1);
   };
 
-  const getTimeElapsed = (startedAt) => {
-    if (!startedAt) return '';
-    const diff = new Date() - (startedAt.toDate ? startedAt.toDate() : new Date(startedAt));
-    const mins = Math.floor(diff / 60000);
-    const hrs = Math.floor(mins / 60);
-    if (Math.floor(hrs / 24) > 0) return `${Math.floor(hrs / 24)}d ago`;
-    if (hrs > 0) return `${hrs}h ago`;
-    return `${mins}m ago`;
+  const toggleGroupExpand = (primaryId) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(primaryId)) next.delete(primaryId);
+      else next.add(primaryId);
+      return next;
+    });
+  };
+
+  const openDetail = (ticket) => {
+    setDetailTicket(ticket);
+    setShowDetailModal(true);
   };
 
   const startJob = async (ticketId) => {
@@ -350,8 +654,11 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
       await updateDoc(doc(db, 'maintenance_tickets', ticketId), {
         status: 'in_progress',
         startedAt: serverTimestamp(),
-        assignedTo: userData?.email || user?.uid,
-        startedByName: userData?.name || userData?.email?.split('@')[0] || 'Technician'
+        assignedToUid: user.uid,
+        assignedToName: techDisplayName,
+        assignedTo: userData?.email || user?.uid, // legacy compat
+        startedByName: techDisplayName, // legacy compat
+        ...auditUpdate(user.uid),
       });
     } catch (e) {
       console.error(e);
@@ -359,19 +666,24 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
     }
   };
 
-  const completeTask = async (id, techName, notes, imageUrls) => {
+  const completeTask = async (id, notes, imageUrls) => {
     try {
       const updateData = {
         status: 'resolved',
         resolvedAt: serverTimestamp(),
-        resolvedBy: techName,
+        resolvedBy: techDisplayName,
+        resolvedByUid: user.uid,
+        completedBy: user.uid,
         completionNotes: notes,
-        completedBy: userData?.email || user?.uid
+        ...auditUpdate(user.uid),
       };
       if (selectedTicket?.status === 'open') {
+         // Quick Fix from open: stamp claim fields too
          updateData.startedAt = serverTimestamp();
-         updateData.assignedTo = userData?.email;
-         updateData.startedByName = techName;
+         updateData.assignedToUid = user.uid;
+         updateData.assignedToName = techDisplayName;
+         updateData.assignedTo = userData?.email || user?.uid; // legacy compat
+         updateData.startedByName = techDisplayName; // legacy compat
          updateData.quickFixed = true;
       }
       if (imageUrls?.length) updateData.completionImageUrls = imageUrls;
@@ -382,56 +694,144 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
     }
   };
 
+  const markDuplicate = async (dup, primary) => {
+    if (!window.confirm(`Mark this report by ${dup.reporterName || 'Anonymous'} as a duplicate? It will be hidden from the active queue.`)) return;
+    try {
+      await updateDoc(doc(db, 'maintenance_tickets', dup.id), {
+        status: 'duplicate',
+        duplicateOf: primary.id,
+        ...auditUpdate(user.uid),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("Error marking duplicate");
+    }
+  };
+
+  const reopenTicket = async (ticket) => {
+    if (!window.confirm('Reopen this ticket? It will return to the Open Pool.')) return;
+    try {
+      await updateDoc(doc(db, 'maintenance_tickets', ticket.id), {
+        status: 'open',
+        reopenedAt: serverTimestamp(),
+        reopenCount: (ticket.reopenCount || 0) + 1,
+        ...auditUpdate(user.uid),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("Error reopening ticket");
+    }
+  };
+
+  const hasActiveFilters = Boolean(searchQuery) || priorityFilter !== 'all' || statusView !== 'all';
+  const tabLabel = TABS.find(t => t.key === activeTab)?.label || 'Active Tickets';
+
+  const renderEmptyState = () => (
+    <div className="text-center py-12">
+      <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
+      <p className="text-slate-800 font-medium">
+        {activeTab === 'my' ? 'No Jobs In Progress' : activeTab === 'pool' ? 'Open Pool Is Empty' : 'All Caught Up!'}
+      </p>
+      <p className="text-slate-500 text-sm">
+        {activeTab === 'my'
+          ? 'Claim a ticket from the Open Pool to get started.'
+          : 'No pending tickets match your filters.'}
+      </p>
+    </div>
+  );
+
+  const renderEntries = (entries) => entries.map(entry => (
+    <TicketRow
+      key={entry.primary.id}
+      entry={entry}
+      expanded={expandedGroups.has(entry.primary.id)}
+      onToggleExpand={toggleGroupExpand}
+      onOpenDetail={openDetail}
+      onStart={startJob}
+      onQuickFix={(t) => { setSelectedTicket(t); setShowCompletionModal(true); }}
+      onMarkDone={(t) => { setSelectedTicket(t); setShowCompletionModal(true); }}
+      onMarkDuplicate={markDuplicate}
+    />
+  ));
+
   return (
     <div className="space-y-6">
 
-      {/* Quick Stats Cards */}
+      {/* Quick Stats Cards (clickable) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard 
-          icon={AlertCircle} 
-          label="Open" 
-          count={stats.open} 
-          colorClass="bg-red-50 text-red-700" 
-          borderColor="border-red-200" 
+        <StatCard
+          icon={AlertCircle}
+          label="Open"
+          count={stats.open}
+          colorClass="bg-red-50 text-red-700"
+          borderColor="border-red-200"
+          onClick={() => selectTab('pool')}
         />
-        <StatCard 
-          icon={Clock} 
-          label="In Progress" 
-          count={stats.inProgress} 
-          colorClass="bg-amber-50 text-amber-700" 
-          borderColor="border-amber-200" 
+        <StatCard
+          icon={Clock}
+          label="In Progress"
+          count={stats.inProgress}
+          colorClass="bg-amber-50 text-amber-700"
+          borderColor="border-amber-200"
+          onClick={() => { setTabChoice('all'); setStatusView('in_progress'); }}
         />
-        <StatCard 
-          icon={CheckCircle} 
-          label="Resolved" 
-          count={stats.resolved} 
-          colorClass="bg-emerald-50 text-emerald-700" 
-          borderColor="border-emerald-200" 
+        <StatCard
+          icon={CheckCircle}
+          label="Resolved"
+          count={stats.resolved}
+          colorClass="bg-emerald-50 text-emerald-700"
+          borderColor="border-emerald-200"
+          onClick={() => setShowResolvedHistory(true)}
         />
-        <StatCard 
-          icon={AlertTriangle} 
-          label="Critical" 
-          count={stats.critical} 
-          colorClass="bg-red-600 text-white" 
-          borderColor="border-red-700" 
+        <StatCard
+          icon={AlertTriangle}
+          label="Critical"
+          count={stats.critical}
+          colorClass="bg-red-600 text-white"
+          borderColor="border-red-700"
+          onClick={() => { setTabChoice('all'); setStatusView('all'); setPriorityFilter('critical'); }}
         />
+      </div>
+
+      {/* Tabs */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-1.5 flex gap-1">
+        {TABS.map(tab => {
+          const isActive = activeTab === tab.key;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => selectTab(tab.key)}
+              className={`flex-1 px-2 md:px-4 py-2 rounded-xl text-xs md:text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                isActive ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              {tab.label}
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+              }`}>
+                {tabCounts[tab.key]}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Search & Filter Bar */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4">
-        <div className="flex flex-col md:flex-row gap-4">
+        <div className="flex flex-col md:flex-row gap-3">
           {/* Search Input */}
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
               type="text"
-              placeholder="Search by category, location, or description..."
+              placeholder="Search category, location, description, or reporter..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:bg-white outline-none transition-all"
             />
           </div>
-          
+
           {/* Priority Filter */}
           <select
             value={priorityFilter}
@@ -444,26 +844,53 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
             <option value="medium">Medium</option>
             <option value="low">Low</option>
           </select>
-          
+
           {/* Sort Options */}
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
             className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
           >
+            <option value="urgent">Urgent First</option>
             <option value="newest">Newest First</option>
             <option value="oldest">Oldest First</option>
-            <option value="priority">By Priority</option>
           </select>
+
+          {/* Walk-order toggle */}
+          <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1">
+            <button
+              type="button"
+              onClick={() => setGroupByBuilding(false)}
+              className={`flex-1 md:flex-none px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                !groupByBuilding ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <List size={14} /> List
+            </button>
+            <button
+              type="button"
+              onClick={() => setGroupByBuilding(true)}
+              className={`flex-1 md:flex-none px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                groupByBuilding ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <Building2 size={14} /> Walk order
+            </button>
+          </div>
         </div>
-        
+
         {/* Results Count */}
         <div className="mt-3 pt-3 border-t border-slate-100">
           <p className="text-sm text-slate-500">
-            Showing <span className="font-bold text-slate-700">{filteredTickets.length}</span> active tickets
-            {(searchQuery || priorityFilter !== 'all') && (
-              <button 
-                onClick={() => { setSearchQuery(''); setPriorityFilter('all'); }}
+            Showing <span className="font-bold text-slate-700">{visibleTickets.length}</span> tickets in {tabLabel}
+            {statusView === 'in_progress' && activeTab === 'all' && (
+              <span className="ml-2 bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full text-xs font-semibold">
+                In progress only
+              </span>
+            )}
+            {hasActiveFilters && (
+              <button
+                onClick={() => { setSearchQuery(''); setPriorityFilter('all'); setStatusView('all'); }}
                 className="ml-2 text-indigo-600 hover:text-indigo-700 font-medium"
               >
                 Clear filters
@@ -473,92 +900,36 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
         </div>
       </div>
 
-      {/* Active Tickets Queue */}
+      {/* Ticket Queue */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div className="flex items-center gap-2">
             <Wrench className="w-5 h-5 text-indigo-600" />
-            <h2 className="font-bold text-slate-800">Active Tickets</h2>
+            <h2 className="font-bold text-slate-800">{tabLabel}</h2>
           </div>
-          <span className="text-sm text-slate-500">{filteredTickets.length} tasks</span>
+          <span className="text-sm text-slate-500">{visibleTickets.length} tasks</span>
         </div>
 
-        {filteredTickets.length === 0 ? (
-          <div className="text-center py-12">
-            <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
-            <p className="text-slate-800 font-medium">All Caught Up!</p>
-            <p className="text-slate-500 text-sm">No pending tasks match your filters.</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-100">
-            {filteredTickets.map(ticket => (
-              <div 
-                key={ticket.id} 
-                className="p-4 hover:bg-slate-50 transition-all duration-200 group cursor-pointer border-l-4 border-transparent hover:border-indigo-500"
-              >
-                <div className="flex flex-col md:flex-row gap-4 items-start md:items-center">
-                  <div className="flex-1" onClick={() => { setDetailTicket(ticket); setShowDetailModal(true); }}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-slate-800 group-hover:text-indigo-700 transition-colors">
-                        {ticket.category}
-                      </span>
-                      {ticket.imageUrls?.length > 0 && (
-                        <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-500 flex items-center gap-1">
-                          <Camera size={10} /> {ticket.imageUrls.length}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                      <span className="flex items-center gap-1">
-                        <MapPin size={12} className="text-slate-400" /> {ticket.location}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Clock size={12} className="text-slate-400" /> {getTimeElapsed(ticket.createdAt)}
-                      </span>
-                      <PriorityBadge priority={ticket.priority} />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
-                    <div className="flex flex-col items-end gap-1">
-                      <StatusBadge status={ticket.status} />
-                      {ticket.status === 'in_progress' && ticket.startedByName && (
-                        <span className="text-[10px] text-slate-500">
-                          by {ticket.startedByName}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex gap-2">
-                      {ticket.status === 'open' && (
-                        <>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); startJob(ticket.id); }} 
-                            className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 flex items-center gap-1 transition-colors"
-                          >
-                            <Play size={12} /> Start
-                          </button>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); setSelectedTicket(ticket); setShowCompletionModal(true); }} 
-                            className="px-3 py-1.5 border border-emerald-500 text-emerald-600 rounded-lg text-xs font-bold hover:bg-emerald-50 flex items-center gap-1 transition-colors"
-                          >
-                            <Zap size={12} /> Quick Fix
-                          </button>
-                        </>
-                      )}
-                      {ticket.status === 'in_progress' && (
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setSelectedTicket(ticket); setShowCompletionModal(true); }} 
-                          className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center gap-1 transition-colors"
-                        >
-                          <CheckCircle size={12} /> Mark Done
-                        </button>
-                      )}
-                    </div>
-                  </div>
+        {groupedTickets.length === 0 ? (
+          renderEmptyState()
+        ) : groupByBuilding && buildingSections ? (
+          <div>
+            {buildingSections.map(section => (
+              <div key={section.key}>
+                <div className="px-4 py-2 bg-slate-100/70 border-y border-slate-200 first:border-t-0 flex items-center gap-2">
+                  <Building2 size={14} className="text-slate-500" />
+                  <span className="text-xs font-bold text-slate-600 uppercase tracking-wide">{section.label}</span>
+                  <span className="text-[10px] font-bold text-slate-400">{section.entries.length}</span>
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {renderEntries(section.entries)}
                 </div>
               </div>
             ))}
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {renderEntries(groupedTickets)}
           </div>
         )}
       </div>
@@ -570,24 +941,29 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
             <Calendar className="w-5 h-5 text-indigo-600" /> Upcoming Schedules
           </h3>
           <div className="grid gap-3">
-            {scheduledTasks.slice(0, 3).map(task => (
-              <div key={task.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center hover:bg-slate-100 transition-colors">
-                <div>
-                  <p className="font-semibold text-slate-700 text-sm">{task.category}</p>
-                  <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
-                    <RefreshCw size={10} /> Every {task.frequencyDays} days
-                    <span className="w-1 h-1 bg-slate-300 rounded-full" />
-                    {task.locations?.length} locations
-                  </p>
+            {scheduledTasks.slice(0, 3).map(({ task, due }) => {
+              const dueNow = due instanceof Date && due.getTime() <= Date.now();
+              return (
+                <div key={task.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center hover:bg-slate-100 transition-colors">
+                  <div>
+                    <p className="font-semibold text-slate-700 text-sm">{task.category}</p>
+                    <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                      <RefreshCw size={10} /> Every {task.frequencyDays} days
+                      <span className="w-1 h-1 bg-slate-300 rounded-full" />
+                      {task.locations?.length} locations
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className={`text-xs font-bold uppercase ${dueNow ? 'text-red-600' : 'text-indigo-600'}`}>
+                      {dueNow ? 'Due Now' : 'Next Due'}
+                    </p>
+                    <p className={`text-sm font-medium ${dueNow ? 'text-red-600' : 'text-slate-800'}`}>
+                      {due instanceof Date ? due.toLocaleDateString() : 'N/A'}
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-xs font-bold text-indigo-600 uppercase">Next Due</p>
-                  <p className="text-sm font-medium text-slate-800">
-                    {task.nextRun?.toDate ? task.nextRun.toDate().toLocaleDateString() : 'N/A'}
-                  </p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -595,7 +971,7 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
       {/* Resolved History Section */}
       {resolvedTickets.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <button 
+          <button
             onClick={() => setShowResolvedHistory(!showResolvedHistory)}
             className="w-full p-5 flex items-center justify-between bg-slate-50/50 hover:bg-slate-100 transition-colors"
           >
@@ -603,60 +979,80 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
               <History className="w-5 h-5 text-emerald-600" />
               <h3 className="font-bold text-slate-800">Resolved History</h3>
               <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-2 py-0.5 rounded-full">
-                {resolvedTickets.length}
+                {stats.resolved}
               </span>
             </div>
             {showResolvedHistory ? <ChevronUp size={20} className="text-slate-400" /> : <ChevronDown size={20} className="text-slate-400" />}
           </button>
-          
+
           {showResolvedHistory && (
             <div className="divide-y divide-slate-100">
-              {resolvedTickets.map(ticket => (
-                <div 
-                  key={ticket.id} 
-                  className="p-4 hover:bg-slate-50 transition-colors cursor-pointer"
-                  onClick={() => { setDetailTicket(ticket); setShowDetailModal(true); }}
-                >
-                  <div className="flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <CheckCircle size={14} className="text-emerald-500" />
-                        <span className="font-medium text-slate-700">{ticket.category}</span>
-                        <PriorityBadge priority={ticket.priority} />
-                      </div>
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                        <span className="flex items-center gap-1">
-                          <MapPin size={12} /> {ticket.location}
-                        </span>
-                        {ticket.resolvedBy && (
+              {resolvedTickets.map(ticket => {
+                const canReopen = ticket.resolvedAt instanceof Date &&
+                  (Date.now() - ticket.resolvedAt.getTime()) < REOPEN_WINDOW_MS;
+                return (
+                  <div
+                    key={ticket.id}
+                    className="p-4 hover:bg-slate-50 transition-colors cursor-pointer"
+                    onClick={() => openDetail(ticket)}
+                  >
+                    <div className="flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <CheckCircle size={14} className="text-emerald-500" />
+                          <span className="font-medium text-slate-700">{ticket.category}</span>
+                          <PriorityBadge priority={ticket.priority} />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
                           <span className="flex items-center gap-1">
-                            <User size={12} /> Fixed by: {ticket.resolvedBy}
+                            <MapPin size={12} /> {ticket.location}
                           </span>
+                          {ticket.resolvedBy && (
+                            <span className="flex items-center gap-1">
+                              <User size={12} /> Fixed by: {ticket.resolvedBy}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-xs text-slate-400">Resolved</p>
+                          <p className="text-sm font-medium text-slate-600">
+                            {fmtDate(ticket.resolvedAt)}
+                          </p>
+                        </div>
+                        {canReopen && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); reopenTicket(ticket); }}
+                            className="px-3 py-1.5 border border-slate-300 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-100 flex items-center gap-1 transition-colors"
+                          >
+                            <RotateCcw size={12} /> Reopen
+                          </button>
                         )}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-xs text-slate-400">Resolved</p>
-                      <p className="text-sm font-medium text-slate-600">
-                        {ticket.resolvedAt?.toDate ? ticket.resolvedAt.toDate().toLocaleDateString() : 'N/A'}
+                    {ticket.completionNotes && (
+                      <p className="mt-2 text-xs text-slate-500 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                        "{ticket.completionNotes}"
                       </p>
-                    </div>
+                    )}
                   </div>
-                  {ticket.completionNotes && (
-                    <p className="mt-2 text-xs text-slate-500 bg-slate-50 p-2 rounded-lg border border-slate-100">
-                      "{ticket.completionNotes}"
-                    </p>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
       {/* Modals */}
-      <CompletionModal isOpen={showCompletionModal} onClose={() => setShowCompletionModal(false)} ticket={selectedTicket} onComplete={completeTask} />
-      <TicketDetailModal isOpen={showDetailModal} onClose={() => setShowDetailModal(false)} ticket={detailTicket} getDisplayName={getDisplayName} getTimeElapsed={getTimeElapsed} />
+      <CompletionModal
+        isOpen={showCompletionModal}
+        onClose={() => setShowCompletionModal(false)}
+        ticket={selectedTicket}
+        onComplete={completeTask}
+        technicianName={techDisplayName}
+      />
+      <TicketDetailModal isOpen={showDetailModal} onClose={() => setShowDetailModal(false)} ticket={detailTicket} getDisplayName={getDisplayName} />
 
     </div>
   );

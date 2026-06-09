@@ -91,10 +91,11 @@ service cloud.firestore {
 
     // 2. Maintenance Tickets
     match /maintenance_tickets/{ticketId} {
-      // Admins and Maintenance see all.
-      // Regular users/Anonymous can see tickets they created (if persisted).
-      allow read: if isAdmin() || isMaintenance() ||
-                  (isAuthenticated() && resource.data.reportedBy == request.auth.uid);
+      // Any authenticated user (incl. anonymous kiosk reporters) may read
+      // tickets — required by the submit form's duplicate-report guard and
+      // the My Reports list; maintenance ticket content is low-sensitivity.
+      // UI gating still follows the CLAUDE.md section 6 matrix.
+      allow read: if isAuthenticated();
 
       // Anyone (including anonymous guests) can create a ticket.
       allow create: if isAuthenticated();
