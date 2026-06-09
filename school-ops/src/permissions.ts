@@ -46,6 +46,7 @@ export type Action =
   | "ticket.update.status"
   | "ticket.escalate"
   | "ticket.delete"
+  | "ticket.cancel"
   | "ticket.note.add"
   // Users / Profiles
   | "user.view.own"
@@ -57,6 +58,7 @@ export type Action =
   | "user.edit.leaveBalance"
   | "user.invite"
   | "user.delete"
+  | "user.manageAdmins"
   // Schedules
   | "schedule.create"
   | "schedule.update"
@@ -66,9 +68,12 @@ export type Action =
   | "leave.approve"
   | "leave.view.own"
   | "leave.view.all"
-  // Audit / Notifications
+  // Audit / Notifications / Settings
   | "audit.read"
-  | "notification.read.broadcast";
+  | "audit.readAll"
+  | "notification.read.broadcast"
+  | "settings.read"
+  | "settings.edit";
 
 // Target shapes passed alongside the action when a check needs context.
 export type Target =
@@ -92,10 +97,13 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
   if (!actor) return false;
 
   const role = actor.role;
-  // super_admin (Head Admin) inherits every admin power. Phase 2.6 will
-  // carve out super-admin-only capabilities (school_settings, audit.readAll,
-  // managing admins themselves) — until then the two roles are functionally
-  // equal and this code happily treats them as such.
+  // super_admin (Head Admin) inherits every admin power, PLUS the
+  // principal-only capabilities: school_settings edits, full audit log,
+  // and managing the admin/super_admin tier itself.
+  //
+  // The legacy `viewAll` flag grants admin-EQUIVALENT access only. It must
+  // never grant the super-admin-only actions (settings.edit, audit.readAll,
+  // user.manageAdmins) or bypass the admin-tier target checks below.
   const isSuperAdmin = role === "super_admin";
   const isAdmin = role === "admin" || isSuperAdmin || actor.viewAll === true;
   const isHR = role === "hr";
@@ -124,6 +132,9 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
     case "ticket.delete":
       return isAdmin;
 
+    case "ticket.cancel":
+      return isAdmin;
+
     case "ticket.note.add":
       return isAdmin || isHR;
 
@@ -132,11 +143,14 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
       return true;
 
     case "user.view.profile": {
-      if (isAdmin) return true;
-      if (target?.type !== "user") return false;
+      if (isSuperAdmin) return true;
+      if (target?.type !== "user") return isAdmin; // capability probe
       const targetRole = target.data.role;
       if (target.data.uid === actor.uid) return true; // own profile
-      if (isHR) return targetRole !== "admin";
+      // Plain admin sees everyone except Head Admins.
+      if (isAdmin) return targetRole !== "super_admin";
+      // HR is blind to the whole admin tier.
+      if (isHR) return targetRole !== "admin" && targetRole !== "super_admin";
       if (isMaintenance) return targetRole === "staff" || targetRole === "maintenance";
       if (isStaff) return targetRole === "staff";
       return false;
@@ -147,23 +161,45 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
 
     case "user.edit.role":
     case "user.edit.status": {
-      if (isAdmin) return true;
-      if (!isHR) return false;
-      // HR can edit role/status of non-admins only.
-      if (target?.type !== "user") return false;
-      return target.data.role !== "admin";
+      // No target = capability probe ("does this actor manage anyone?").
+      if (target?.type !== "user") return isAnyManager;
+      if (isSuperAdmin) return true;
+      // Only Head Admin manages the admin tier — plain admin and HR are
+      // both restricted to non-admin targets.
+      const targetRole = target.data.role;
+      return isAnyManager && targetRole !== "admin" && targetRole !== "super_admin";
     }
 
     case "user.edit.salary":
-    case "user.edit.leaveBalance":
-      // Only HR and admin can write salary or leave balance — never the user themselves.
+    case "user.edit.leaveBalance": {
+      // Never the user themselves — not even Head Admin (firestore.rules
+      // mirrors this with a salaryTierFields() self-write guard).
+      // Admin-tier targets are Head Admin only.
+      if (target?.type === "user") {
+        if (target.data.uid === actor.uid) return false;
+        const targetRole = target.data.role;
+        if (targetRole === "admin" || targetRole === "super_admin") return isSuperAdmin;
+      }
       return isAnyManager;
+    }
 
     case "user.invite":
       return isAnyManager;
 
-    case "user.delete":
+    case "user.delete": {
+      // Deleting an admin or Head Admin is Head Admin only (last-one guard
+      // is enforced separately, server-side).
+      if (target?.type === "user") {
+        const targetRole = target.data.role;
+        if (targetRole === "admin" || targetRole === "super_admin") return isSuperAdmin;
+      }
       return isAdmin;
+    }
+
+    case "user.manageAdmins":
+      // Promote/demote/list the admin + super_admin tier. Head Admin only;
+      // viewAll must never grant this.
+      return isSuperAdmin;
 
     // ---------------------------------------------------------------- schedules
     case "schedule.create":
@@ -184,12 +220,27 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
     case "leave.view.all":
       return isAnyManager;
 
-    // ----------------------------------------------------------- audit / notif
+    // ------------------------------------------- audit / notif / settings
     case "audit.read":
+      // Entries about non-admins only — see audit.readAll for the full log.
       return isAnyManager;
+
+    case "audit.readAll":
+      // Every entry, including those about admins and super_admins.
+      return isSuperAdmin;
 
     case "notification.read.broadcast":
       return isAnyManager;
+
+    case "settings.read":
+      // Real hr/admin roles only — firestore.rules school_settings read has
+      // no viewAll concept, so granting it here would promise a read the
+      // rules refuse (permission-denied snapshot on /settings).
+      return isHR || role === "admin" || isSuperAdmin;
+
+    case "settings.edit":
+      // School-wide knobs are principal-only; viewAll must never grant this.
+      return isSuperAdmin;
 
     default: {
       // Exhaustiveness check — TypeScript ensures we handled every Action.

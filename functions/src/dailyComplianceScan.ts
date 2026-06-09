@@ -14,7 +14,8 @@ import { logger } from "firebase-functions/v2";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { db } from "./admin";
-import { sendInviteEmail, RESEND_API_KEY } from "./email";
+import { sendComplianceAlertEmail, RESEND_API_KEY } from "./email";
+import { appBaseUrl } from "./config";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -245,7 +246,7 @@ export const dailyComplianceScan = onSchedule(
     // ----- Write per-employee notifications -----
     let writeCount = 0;
     let emailSent = 0;
-    const writeBatch = db.batch();
+    let writeBatch = db.batch();
     let batchOps = 0;
 
     for (const f of findings) {
@@ -267,27 +268,41 @@ export const dailyComplianceScan = onSchedule(
       // Roll to a new batch every ~450 ops (Firestore limit is 500)
       if (batchOps >= 450) {
         await writeBatch.commit();
+        writeBatch = db.batch();
         batchOps = 0;
-      }
-
-      // Critical: also email the employee (best-effort, ignore failures)
-      if (f.priority === "critical") {
-        try {
-          const sent = await sendInviteEmail({
-            to: f.email,
-            recipientName: f.displayName,
-            inviteUrl: "https://afsup-3ff9b.web.app/profile",
-            inviterName: "Al Fajer School HR",
-            role: f.subject,
-          });
-          if (sent) emailSent++;
-        } catch (err) {
-          logger.warn("Email send failed (continuing)", { err: String(err), uid: f.uid });
-        }
       }
     }
 
     if (batchOps > 0) await writeBatch.commit();
+
+    // ----- Email employees with critical findings (best-effort) -----
+    // One email per affected employee listing all of their critical items.
+    const criticalByUid = new Map<string, Finding[]>();
+    for (const f of findings) {
+      if (f.priority !== "critical") continue;
+      const list = criticalByUid.get(f.uid) ?? [];
+      list.push(f);
+      criticalByUid.set(f.uid, list);
+    }
+
+    for (const items of criticalByUid.values()) {
+      const { email, displayName, uid } = items[0];
+      if (!email) continue;
+      try {
+        const sent = await sendComplianceAlertEmail({
+          to: email,
+          name: displayName,
+          items: items.map((f) => ({
+            severity: f.priority,
+            message: `${f.subject}: ${f.body}`,
+          })),
+          appUrl: appBaseUrl(),
+        });
+        if (sent) emailSent++;
+      } catch (err) {
+        logger.warn("Email send failed (continuing)", { err: String(err), uid });
+      }
+    }
 
     // ----- One broadcast notification to HR/admin per critical -----
     const critical = findings.filter((f) => f.priority === "critical");

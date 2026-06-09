@@ -12,7 +12,9 @@ import StaffDirectoryRoute from "./routes/StaffDirectoryRoute";
 import EmployeeRoute from "./routes/EmployeeRoute";
 import AcceptInviteRoute from "./routes/AcceptInviteRoute";
 import NotificationsRoute from "./routes/NotificationsRoute";
-import { RequireAuth, RequireCan } from "./routes/guards";
+import SettingsRoute from "./routes/SettingsRoute";
+import AdminManagementRoute from "./routes/AdminManagementRoute";
+import { RequireAction, RequireAuth, RequireCan } from "./routes/guards";
 
 export const router = createBrowserRouter([
   // /accept-invite lives OUTSIDE RootLayout: invitees aren't authenticated
@@ -77,6 +79,22 @@ export const router = createBrowserRouter([
           <RequireAuth>
             <NotificationsRoute />
           </RequireAuth>
+        ),
+      },
+      {
+        path: "settings",
+        element: (
+          <RequireAction action="settings.read">
+            <SettingsRoute />
+          </RequireAction>
+        ),
+      },
+      {
+        path: "admin-management",
+        element: (
+          <RequireAction action="user.manageAdmins">
+            <AdminManagementRoute />
+          </RequireAction>
         ),
       },
       { path: "*", element: <Navigate to="/" replace /> },

@@ -33,23 +33,19 @@ User-facing model:
 
 ## 3. Current State (honest audit)
 
-**What works well:**
-- Maintenance ticket flow (report → start → resolve) is solid and battle-tested
-- Firestore security rules ([firestore.rules](firestore.rules)) are well-thought-out and enforce role separation server-side
-- Bahrain-specific HRIS domain logic (sick-leave tiers 15/20/20, LMRA visa tracking, MOE teacher approval cycle) is correct in shape; **GOSI rates need updating to 17%/8% Bahraini + 3%/1% expat** (see PHASES.md Appendix A); WPS export should target the LMRA CSV format (not the UAE SIF)
+**What works well (updated 2026-06-10):**
+- Maintenance V2 is live end-to-end: search-or-type report form with duplicate guard, technician queue (My Jobs / Open Pool / All / Insights), claim + reopen + cancel + notes thread, working schedules, server-side audit + reporter notifications via `onTicketStatusChange`
+- Firestore security rules ([firestore.rules](firestore.rules)) enforce the §6 matrix server-side, including field-level salary guards (never self-editable), admin-tier protection, and CF-only writes for role/status/leave decisions/settings
+- Bahrain HRIS domain logic: sick-leave tiers 15/20/20, LMRA visa tracking, MOE teacher approval cycle; GOSI rates read from `school_settings` (defaults 17%/8% Bahraini + 3%/1% expat); WPS export is a pragmatic LMRA CSV approximation
+- Data layer: React Query hooks with role-scoped real-time subscriptions; permissions centralized in `can()` and mirrored across client/functions/rules; mutations audited
 
 **What's broken or smells:**
-- **Registration race condition** patched with 500ms polling + a `REGISTRATION_IN_PROGRESS` localStorage flag — see [auth.js:60](school-ops/src/auth.js:60) and [App.jsx:30](school-ops/src/App.jsx:30). Symptom of the wrong flow (user-driven registration creating the Firestore user doc *after* the auth user).
-- **Duplicate data fetching** — `getDocs(collection(db, 'users'))` runs independently in [HRSystem.jsx:342](school-ops/src/HRsys/HRSystem.jsx:342), [AdminView.jsx:296](school-ops/src/AdminView.jsx:296), and [HRDirectory.jsx](school-ops/src/HRsys/HRDirectory.jsx).
-- **HR uses one-shot `getDocs`, not `onSnapshot`** — HR data goes stale until a manual refresh.
-- **`window.location.reload()`** used as a refresh mechanism — [HRSystem.jsx:451](school-ops/src/HRsys/HRSystem.jsx:451), `:642`.
-- **Broken stub** — `handleQuickApprove` in [HRSystem.jsx:455](school-ops/src/HRsys/HRSystem.jsx:455) is `alert('implement with updateDoc')`.
-- **Permission rules duplicated 4×** — [Layout.jsx:43](school-ops/src/Layout.jsx:43), [AdminView.jsx:175](school-ops/src/AdminView.jsx:175), [HRSystem.jsx:346](school-ops/src/HRsys/HRSystem.jsx:346), and [firestore.rules](firestore.rules). Will drift.
-- **No URLs** — `activeRole` state instead of routes. No bookmarking, broken back button, can't share links.
-- **No backend** — no Cloud Functions. Scheduled tasks sit in Firestore but no code runs them.
-- **No audit trail** — `createdBy`/`updatedBy`/`updatedAt` are inconsistent or missing.
-- **Hardcoded super-admin email** in [auth.js:58](school-ops/src/auth.js:58).
-- **Mobile menu missing items** that desktop has (HR, profile) — [Layout.jsx:240](school-ops/src/Layout.jsx:240).
+- **Registration race condition** patched with 500ms polling + a `REGISTRATION_IN_PROGRESS` localStorage flag (legacy self-register path) — delete once self-register is fully retired in favor of invites.
+- **Hardcoded super-admin email** in [auth.js:58](school-ops/src/auth.js:58) — remove after the Head Admin bootstrap is confirmed (along with the one-shot banner in Layout.jsx).
+- **`APP_BASE_URL` functions param still defaults to the stale `afsup-3ff9b.web.app`** — must be set to the production Netlify URL before email links are trustworthy ([functions/src/config.ts](functions/src/config.ts)).
+- **`UserProfile.jsx` is still a ~1700-line manual form** — React Hook Form + Zod refactor pending (Phase 2 leftover).
+- **No Firestore emulator tests for rules** — the permissions unit suite exists (77 tests) but rules changes are still verified by hand.
+- **No audit-log reader UI** — every Cloud Function writes entries but there is no screen to browse them yet.
 
 ---
 
@@ -164,10 +160,10 @@ The data model stays in separate Firestore collections. Unification happens at t
 | `insuranceProvider`, `insurancePolicyNumber` | string | self |
 
 ### `maintenance_tickets/{id}`
-Existing schema is fine — see [school-ops/README.md](school-ops/README.md). Add `updatedBy`/`updatedAt` audit fields on every status change. Phase 2.8 adds additive optional fields — `categoryGroup`, `impact`, `assignedToUid`/`assignedToName`, `resolvedByUid`, `duplicateOf`, reopen tracking (`reopenedAt`, `reopenCount`), and the new status value `'duplicate'` — which legacy tickets lack, so all readers must tolerate their absence.
+Existing schema is fine — see [school-ops/README.md](school-ops/README.md). Add `updatedBy`/`updatedAt` audit fields on every status change. Phase 2.8 adds additive optional fields — `categoryGroup`, `impact`, `assignedToUid`/`assignedToName`, `resolvedByUid`, `duplicateOf`, reopen tracking (`reopenedAt`, `reopenCount`), the status values `'duplicate'` and `'cancelled'` (with `cancelReason`, `cancelledByUid`, `cancelledByName`), and a `notesThread` array of `{byUid, byName, text, at}` — which legacy tickets lack, so all readers must tolerate their absence.
 
 ### `leave_requests/{id}`
-Existing schema is fine. Every status change writes to `audit_log`.
+Existing schema is fine, plus `leaveType` (defaults `'annual'`) and `decisionReason`. `status` is **immutable from the client** — approve/reject goes through the `decideLeaveRequest` Cloud Function, which debits the balance transactionally, denies self-approval, writes `audit_log`, and notifies the employee (`leave_decision` notification).
 
 ### `scheduled_tasks/{id}`
 Existing schema is fine — **but no code runs them yet.** Phase 4 adds a Cloud Function trigger.
@@ -195,9 +191,9 @@ Existing schema is fine — **but no code runs them yet.** Phase 4 adds a Cloud 
 | `before`, `after` | object (diff) |
 | `at` | Timestamp |
 
-### `school_settings/{singleton}` (NEW — Phase 2.6, Head Admin only)
+### `school_settings/{singleton}` (Phase 2.6, Head Admin only — live 2026-06-10)
 
-A single document (id `current`) holding school-wide knobs that used to be hardcoded. Head Admin is the only role that can edit; HR/admin can read so dashboards can show the current values.
+A single document (id `current`) holding school-wide knobs that used to be hardcoded. Head Admin is the only role that can edit; HR/admin can read so dashboards can show the current values. **All writes go through the `updateSchoolSettings` Cloud Function** (whitelist-validated, audit-logged); the client cannot write. The doc is created lazily on the first Settings save — until then `effectiveSettings()` in [useSchoolSettings.ts](school-ops/src/data/useSchoolSettings.ts) serves the defaults below.
 
 | Field | Type | Default |
 |---|---|---|
@@ -338,6 +334,8 @@ HR/Admin approves → annualLeaveBalance decremented (server-side via Cloud Func
         OR rejects → notification fires with reason
 ```
 
+**Implemented 2026-06-10** as the `decideLeaveRequest` callable: transactional debit (per-type via `leaveBalances`), self-approval denied, `leave_requests.status` immutable from the client. The submit side computes `daysRequested` from the date range, blocks overlapping requests, and stamps `submittedAt` with `serverTimestamp()`.
+
 ### 7d. Compliance alerts (move from client to Cloud Function)
 
 - **Scheduled Cloud Function** runs daily at 02:00 Bahrain time
@@ -403,7 +401,7 @@ These apply to **all new code**. Refactor existing code to match as Phase 1 prog
 - [ ] Create `src/permissions.ts` with `can()` function
 - [ ] Replace all role-string checks in [Layout.jsx](school-ops/src/Layout.jsx), [AdminView.jsx](school-ops/src/AdminView.jsx), [HRSystem.jsx](school-ops/src/HRsys/HRSystem.jsx) with `can()`
 - [ ] Add `createdBy`, `updatedBy`, `updatedAt` to all writes
-- [ ] Fix [HRSystem.jsx:455](school-ops/src/HRsys/HRSystem.jsx:455) stub (`handleQuickApprove`)
+- [x] Fix [HRSystem.jsx](school-ops/src/HRsys/HRSystem.jsx) stub (`handleQuickApprove`) — wired to the `updateUserStatus` CF (2026-06-10)
 - [ ] Fix mobile menu missing items in [Layout.jsx:240](school-ops/src/Layout.jsx:240)
 - [ ] Add Vitest, test the permissions module
 
@@ -428,32 +426,33 @@ These apply to **all new code**. Refactor existing code to match as Phase 1 prog
 - [x] `inviteUser` Cloud Function accepts new fields at invite time
 - [x] Compliance alerts extended: MOE expiry, contract expiry (60d), probation end (30d)
 - [x] BirthdaysAnniversariesWidget on HR dashboard (looks ahead 30d)
-- [ ] Reports tab (GOSI submission, WPS SIF, Expiry Watchlist, Headcount, Leave Utilization, EOSG Liability) — Phase 2.6
+- [x] Reports tab — GOSI submission (2026 rates incl. expats, rates from `school_settings`), WPS LMRA CSV approximation, Expiry Watchlist, EOSG Liability. [ ] Headcount + Leave Utilization reports still pending
 - [ ] Move compliance scan from client to scheduled Cloud Function — Phase 4
 - [ ] Multi-type leave management (maternity/paternity/hajj/etc.) — Phase 2.7
 - [ ] Org chart / reporting hierarchy — Phase 3
 
-### Phase 2.6 — Head Admin role (super_admin)
-- [ ] Add `super_admin` to the `Role` union in [constants.ts](school-ops/src/constants.ts) and the `ROLES` map
-- [ ] Update [permissions.ts](school-ops/src/permissions.ts):
-  - Add `isSuperAdmin` derived flag
-  - Add new actions: `settings.read`, `settings.edit`, `audit.readAll`, `user.impersonate`
-  - Tighten `user.edit.role/status`, `user.invite`, `user.delete` so admin → admin is denied
-  - Update `assignableRoles()` to return all 5 for super_admin
-- [ ] Update [firestore.rules](firestore.rules):
-  - Add `isSuperAdmin()` helper
-  - Replace every `isAdmin()` check that should be principal-only with `isSuperAdmin()`
-  - Add rules for `school_settings/{singleton}`
-  - Tighten `users` UPDATE: deny role/status changes targeting an `admin` or `super_admin` unless caller is `super_admin`
-- [ ] Create `school_settings/current` document (schema in §5), seeded with current hardcoded values
-- [ ] Build a "School Settings" page (Head Admin only) — academic year, working days, holidays, GOSI rates, WPS bank code, notification recipients
-- [ ] Build "Admin Management" view (Head Admin only) — list current admins/super_admins with promote/demote actions
-- [ ] Cloud Function `bootstrapSuperAdmin(email)` — one-time migration to promote the principal from admin → super_admin
-- [ ] Cloud Function `updateUserRole(targetUid, newRole)` — server-side enforcement of the matrix (replaces direct client writes for role/status)
-- [ ] Last-super-admin guard: refuse to demote/delete the only remaining super_admin (both client and Cloud Function)
-- [ ] UI label: render `super_admin` as **"Head Admin"** everywhere (badge color: indigo-700, distinct from admin's slate)
-- [ ] Audit log filter: HR/admin see entries about non-admins; super_admin sees all
-- [ ] Tests: permissions module + emulator tests for role-elevation attempts
+### Phase 2.6 — Head Admin role (super_admin) — mostly done 2026-06-10
+- [x] Add `super_admin` to the `Role` union in [constants.ts](school-ops/src/constants.ts) and the `ROLES` map (+ `ROLE_LABELS` with "Head Admin")
+- [x] Update [permissions.ts](school-ops/src/permissions.ts):
+  - [x] `isSuperAdmin` derived flag
+  - [x] New actions: `settings.read`, `settings.edit`, `audit.readAll`, `user.manageAdmins`, `ticket.cancel` (`user.impersonate` deferred with the impersonation feature)
+  - [x] Tightened `user.edit.role/status`, `user.edit.salary`, `user.delete` so admin → admin-tier is denied; salary/leave-balance never self-editable
+  - [x] `assignableRoles()` returns all 5 for super_admin
+- [x] Update [firestore.rules](firestore.rules):
+  - [x] `isSuperAdmin()` + `isHR()` helpers
+  - [x] Principal-only checks: super_admin docs writable only by super_admin; salary fields on admin docs super_admin-only
+  - [x] Rules for `school_settings/{singleton}` (read HR/admin, write CF-only)
+  - [x] `users` READ/UPDATE tightened: plain admin cannot read or write super_admin docs; role/status remain CF-only; self-edit field guards
+- [x] `school_settings/current` — created lazily by the first Settings save; defaults served by `effectiveSettings()` until then
+- [x] "School Settings" page (`/settings`) — academic year, working days, holidays, GOSI rates, WPS, leave defaults, notification recipients; saves via `updateSchoolSettings` CF
+- [x] "Admin Management" view (`/admin-management`, Head Admin only) — promote/demote/suspend with last-Head-Admin guard
+- [x] Cloud Function `bootstrapSuperAdmin(email)` — deployed; remove seed + banner after the principal's promotion is confirmed
+- [x] Cloud Functions `updateUserRole`/`updateUserStatus`/`deleteUser` — server-side matrix enforcement
+- [x] Last-super-admin guard in all three mutation CFs + client-side disable
+- [x] UI label: `super_admin` renders as **"Head Admin"** (indigo-700) everywhere
+- [ ] Audit log reader UI + filter: HR/admin see entries about non-admins; super_admin sees all
+- [x] Tests: permissions module (77 passing). [ ] Emulator tests for role-elevation attempts — still open
+- [ ] Impersonation ("log in as") — deferred, needs its own design pass
 
 ### Phase 3 — Unification & polish
 - [ ] `/employees/:uid` view merging profile + tickets + leave history

@@ -3,9 +3,11 @@
 // Replaces the duplicate getDocs(collection(db, 'users')) calls in
 // HRSystem, AdminView, and HRDirectory — see CLAUDE.md section 3.
 
-import { collection, doc } from "firebase/firestore";
+import { collection, doc, query, where } from "firebase/firestore";
 import { db } from "../firebase";
+import type { Role } from "../constants";
 import type { User } from "../types";
+import type { Actor } from "../permissions";
 import { useFirestoreDoc, useFirestoreQuery, toDate } from "./firestoreSubscription";
 
 export const USERS_KEY = ["users"] as const;
@@ -32,11 +34,33 @@ function convertUser(id: string, data: Record<string, unknown>): User {
   } as User;
 }
 
-/** Subscribe to every user in the system. UI should still filter via `can()`. */
-export function useUsers(enabled = true) {
+// Which target roles each actor role may LIST. A Firestore list grant must
+// hold for EVERY doc the query could match, so the query carries an explicit
+// `role in [...]` filter mirroring the firestore.rules read branches. Only
+// super_admin (absent here) may subscribe to the whole collection.
+const LIST_SCOPE: Partial<Record<Role, Role[]>> = {
+  admin: ["staff", "maintenance", "hr", "admin"],
+  hr: ["staff", "maintenance", "hr"],
+  maintenance: ["staff", "maintenance"],
+  staff: ["staff"],
+};
+
+/**
+ * Subscribe to the users the actor may list. UI should still filter via `can()`.
+ *
+ * Scoping uses the actor's REAL role only — never the legacy `viewAll` flag.
+ * firestore.rules has no viewAll concept, so a viewAll actor issuing an
+ * unscoped query would get permission-denied at the subscription.
+ */
+export function useUsers(actor?: Partial<Pick<Actor, "role" | "viewAll">> | null, enabled = true) {
+  const role = actor?.role;
+  const scope = role ? LIST_SCOPE[role] : undefined;
   return useFirestoreQuery<User>(
-    [...USERS_KEY],
-    () => collection(db, "users"),
+    scope ? [...USERS_KEY, `scope:${role}`] : [...USERS_KEY],
+    () =>
+      scope
+        ? query(collection(db, "users"), where("role", "in", scope))
+        : collection(db, "users"),
     convertUser,
     { enabled },
   );

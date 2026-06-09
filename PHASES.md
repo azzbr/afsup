@@ -36,10 +36,10 @@ Phases 2.6 → 5 below take us there.
 | 1 — Foundation | ◐ Partial | TypeScript + Router + React Query + permissions.ts done. Cleanup tasks (audit fields everywhere, mobile menu) outstanding. |
 | 2 — Backend & invite flow | ✅ Done | Cloud Functions + invite flow + accept-invite live. Migration tasks remain. |
 | 2.5 — HR Domain Extension | ✅ Done | All schema + UI in production. Reports tab moved to 2.6. |
-| 2.6 — Head Admin role | ◐ Started | super_admin recognized everywhere + bootstrapSuperAdmin live. Settings UI, admin mgmt, guards remain. |
-| 2.6.1 — Audit hotfixes | 🔥 URGENT | June 2026 full-code audit found broken HR-role rules, data-wiping save, dead admin actions. See below. |
-| 2.7 — Multi-type leave | ⏳ Queued | Constants + balance lib exist; submission UI partial; approval must move server-side (see 2.6.1). |
-| 2.8 — Maintenance V2 | ◕ Mostly done (2026-06-10) | Form V2, Queue V2, schedules fix, status-change Cloud Function all shipped. Remaining: supervisor mini-dashboard, `cancelled` status. |
+| 2.6 — Head Admin role | ◕ Mostly done (2026-06-10) | Settings page, Admin Management, last-Head-Admin guard, tightened matrix on all 3 surfaces, updateSchoolSettings CF all live. Remaining: emulator rules tests, audit-log reader UI, impersonation. |
+| 2.6.1 — Audit hotfixes | ✅ Done (2026-06-10) | Every critical/high/medium item shipped — see checklist below. |
+| 2.7 — Multi-type leave | ◐ Started | Constants + balance lib exist; `decideLeaveRequest` CF (delivered with 2.6.1) already debits per-type balances. Remaining: per-type submission UI polish, annual reset CF, tier preview. |
+| 2.8 — Maintenance V2 | ✅ Done (2026-06-10) | Form V2, Queue V2, schedules fix, status-change CF, supervisor Insights, `cancelled` status, notes thread all shipped. |
 | 3 — Unification & polish | ⏳ Queued | Profile-merged-with-tickets view, PWA, Sentry. |
 | 4 — Automation | ◐ Started | dailyComplianceScan + runScheduledTasks exist. SLA escalation + event notifications remain. |
 | 5+ — Differentiators | 🆕 Planning | Sharpened by competitor research (see §Appendix A). |
@@ -49,6 +49,8 @@ Phases 2.6 → 5 below take us there.
 ## Phase 2.6 — Head Admin role
 
 **Goal:** Introduce a `super_admin` tier above `admin` so the principal (and only the principal) can manage admins themselves, change school-wide settings, and audit every action — without granting that power to admin assistants.
+
+**Status (2026-06-10): mostly done.** Shipped: tightened matrix on all three surfaces (client `can()`, functions, firestore.rules — plain admin can no longer view/edit/delete the admin tier), `/settings` School Settings page (writes via the whitelist-validated `updateSchoolSettings` CF), `/admin-management` promote/demote view, last-Head-Admin guard in `updateUserRole`/`updateUserStatus`/`deleteUser`, `inviteUser` accepts `super_admin`, "Head Admin" indigo badge everywhere, expanded permissions unit tests (77 passing). The `school_settings/current` doc is created lazily on first Settings save; until then `effectiveSettings()` serves the CLAUDE.md defaults. **Remaining:** Firestore emulator rules test suite, audit-log reader UI with the HR/admin vs super_admin filter, impersonation ("log in as").
 
 **Done when:**
 - One promoted Head Admin can edit `school_settings/current` and see it reflected on dashboards
@@ -92,19 +94,19 @@ A line-by-line read of every source file found bugs that block real users today.
 
 ### Critical (broken for users right now)
 
-- [ ] **HR role cannot use the HR module.** `useUsers` subscribes to the whole `users` collection, but firestore.rules only lets `hr` read non-admin docs — Firestore denies list queries it can't prove safe for every doc, so the entire subscription fails for any real `hr`-role user. Same for `leave_requests`: HR's "all pending" query is denied (rules allow read only for admin/own), and `allow update: if isAdmin()` means HR cannot approve/reject leave at all. Works today only because current HR people hold the `admin` role. **Fix:** rules for users LIST (filtered queries + per-role read rules) or move HR list reads behind a Cloud Function / restructure rules; allow HR read+update on leave_requests per the §6 matrix.
-- [ ] **EmployeeDetailView wipes dates on save.** It expects Firestore Timestamps (`d?.toDate`) but receives JS Dates from `useUsers` → edit-form date inputs initialize empty → saving any field nulls `cprExpiry`, `passportExpiry`, `residencePermitExpiry`, `dateOfJoining`. Data loss on every HR edit via the detail view.
-- [ ] **EmployeeDetailView "Admin Actions" are all dead.** Status/role buttons write `role`/`status` via client `updateDoc` — firestore.rules makes both immutable from the client (Cloud Functions only). Delete uses client `deleteDoc` — rules say `allow delete: if false`. Every button errors. Also offers a `terminated` status that doesn't exist in the schema. **Fix:** call `updateUserRole`/`updateUserStatus`/`deleteUser` CFs like AdminView does; align status vocabulary.
-- [ ] **Same `.toDate` bug class in HR UI:** EmployeeDetailView compliance alerts never render, tenure never renders, HRDirectory "Joined" column always shows "—", `checkComplianceStatus` red dots fire only on the IBAN rule.
+- [x] ~~**HR role cannot use the HR module.**~~ — **done 2026-06-10**: `useUsers` now issues role-scoped list queries (`role in [...]` per actor role) that firestore.rules can prove; `leave_requests` rules grant HR read + non-status update; decisions go through the `decideLeaveRequest` CF. Plain-admin list queries are scoped too (admins can no longer stream Head Admin docs).
+- [x] ~~**EmployeeDetailView wipes dates on save.**~~ — **done 2026-06-10**: JS-Date-safe `toInputDate`, diff-only save payload (untouched fields omitted), `auditUpdate` stamps.
+- [x] ~~**EmployeeDetailView "Admin Actions" are all dead.**~~ — **done 2026-06-10**: wired to `updateUserRole`/`updateUserStatus`/`deleteUser` CFs, `terminated` removed, statuses from `USER_STATUSES`, gated by target-aware `can()`.
+- [x] ~~**Same `.toDate` bug class in HR UI**~~ — **done 2026-06-10**: zero `.toDate` left in HRsys; compliance alerts/tenure/Joined column all render from JS Dates via shared `hr/compliance.ts`.
 
 ### High
 
-- [ ] **Move leave approval server-side** (`decideLeaveRequest` CF): the client read-modify-write balance update has no transaction (double-approve = double-debit), is duplicated in AdminView + HRSystem (already drifting), and sends no notification to the employee.
-- [ ] **super_admin invisible in HR UI:** `canEdit = ['admin','hr'].includes(role)` excludes Head Admin from editing profiles; `isAdmin = role==='admin'` hides the Admin Actions tab; HRDirectory RoleBadge renders super_admin with the "Staff" badge. Replace every role-string check with `can()` (coding rule 2).
-- [ ] **Invite modal offers Head Admin but server rejects it:** `assignableRoles` now returns `super_admin` for Head Admins, but `inviteUser`'s `isValidRole` only accepts the four legacy roles → "Invalid role" error. Add super_admin to the CF (gated by `canAssignRole`).
-- [ ] **Self-edit field security gap:** rules let any user write their own `basicSalary` / `annualLeaveBalance` / `sickDaysUsed` (matrix says HR/admin only — "NEVER self"). UI hides the fields but the rules don't enforce it. Add field-level guards to the users UPDATE rule. Also: UserProfile's save spreads leave-form scratch fields (`leaveStart`, `leaveDays`, `leaveReason`) onto the user doc as junk.
-- [ ] **GOSI report uses pre-2024 rates and omits expats:** `hr/reports.ts` + HRReports.jsx hardcode 5%/8%→12% (employee 5%, employer 12%). Current rates: Bahraini 8% employee + 17% employer; expat 1% + 3% — and expats must appear in the submission. Read rates from `school_settings` (Phase 2.6) instead of literals.
-- [ ] **dailyComplianceScan emails are wrong:** critical alerts reuse the invite-email template ("you've been invited, role: CPR expired") and link to `https://afsup-3ff9b.web.app` — the app lives on Netlify. Needs a real alert template + correct base URL.
+- [x] ~~**Move leave approval server-side**~~ — **done 2026-06-10**: `decideLeaveRequest` CF (transaction, per-type balance debit, audit entry, employee notification, self-approval denied); AdminView + HRSystem both call it; client balance math deleted; `leave_requests.status` immutable from the client.
+- [x] ~~**super_admin invisible in HR UI**~~ — **done 2026-06-10**: role-string checks replaced with `can()`; `ROLE_LABELS` renders Head Admin (indigo-700) everywhere incl. HRDirectory RoleBadge.
+- [x] ~~**Invite modal offers Head Admin but server rejects it**~~ — **done 2026-06-10**: `inviteUser` accepts `super_admin`, gated by `canAssignRole`.
+- [x] ~~**Self-edit field security gap**~~ — **done 2026-06-10**: firestore.rules `restrictedSelfFields()` guard on the own-profile branch PLUS a branch-wide never-self `salaryTierFields()` guard (closes the HR/super_admin self-salary hole); UserProfile save payload is now an explicit allowlist (no leave scratch fields, restricted inputs read-only "Set by HR"); client `can()` denies self-targeted `user.edit.salary`/`leaveBalance`.
+- [x] ~~**GOSI report uses pre-2024 rates and omits expats**~~ — **done 2026-06-10**: rates from `school_settings` via `effectiveSettings` (defaults 17%/8% Bahraini, 3%/1% expat), expats included; WPS reframed as LMRA CSV approximation.
+- [x] ~~**dailyComplianceScan emails are wrong**~~ — **done 2026-06-10**: dedicated `sendComplianceAlertEmail` template; base URL centralized in `functions/src/config.ts` (`APP_BASE_URL` param). **ACTION NEEDED: set `APP_BASE_URL` to the production Netlify URL via functions env — default is still the stale web.app placeholder.**
 
 ### Medium
 
@@ -113,12 +115,12 @@ A line-by-line read of every source file found bugs that block real users today.
 - [x] ~~MaintenanceView's in-card sort dropdown is dead; resolved history sorts by created not resolved date~~ — **done 2026-06-10**: shared `ticketSorters` (urgent default = priority then oldest); resolved history sorts by `resolvedAt`.
 - [x] ~~Scheduler: "Start Immediately" doesn't~~ — **done 2026-06-10**: creation writes `nextRun = now` (or startDate), `lastRun = null`, `nextDue` junk field removed; UI shows `computeScheduleDue()` everywhere instead of "N/A".
 - [x] ~~ReportForm anonymous first-submit stale closure~~ — **done 2026-06-10**: captured returned user from `signInAsAnonymous()` into a local const.
-- [ ] Dead buttons: HR "Export HR Report", "HR Settings", HRDirectory "Export", EmployeeDetailView "Print", no-op refresh buttons. Either wire or remove.
-- [ ] Blocked/suspended **admins** bypass RootLayout's sign-out gate (`status !== 'approved' && role !== 'admin'`); they're saved only by the Auth-disable flag at token refresh. Tighten the condition.
-- [ ] `queryClient` cache survives sign-out (shared school computers) — call `queryClient.clear()` in `handleSignOut`.
-- [ ] Leave submission: `daysRequested` is hand-typed, not computed from the date range (and not validated against it); no overlap check against existing approved leave; `submittedAt` uses client clock.
-- [ ] EmployeeDetailView Leave tab: history is a hardcoded empty placeholder (leave_requests for that uid are one query away); balance card reads only legacy `annualLeaveBalance`.
-- [ ] Compliance logic lives in 4 places (AdminView, HRSystem, EmployeeDetailView, dailyComplianceScan) with drifting thresholds. Collapse to one shared module (`hr/compliance.ts`) consumed by all three UI surfaces, until Phase 4 makes the CF the single source.
+- [x] ~~Dead buttons~~ — **done 2026-06-10**: HRDirectory Export → real CSV download; "HR Settings" → `/settings` (gated by `settings.read`); EmployeeDetailView "Print" → `window.print()`; no-op refresh buttons wired to query invalidation or removed.
+- [x] ~~Blocked/suspended admins bypass RootLayout's sign-out gate~~ — **done 2026-06-10**: blocked/suspended users always signed out regardless of role.
+- [x] ~~`queryClient` cache survives sign-out~~ — **done 2026-06-10**: `queryClient.clear()` on sign-out.
+- [x] ~~Leave submission: hand-typed days, no overlap check, client clock~~ — **done 2026-06-10**: `daysRequestedBetween` computes the days read-only from the range; `findOverlap` blocks conflicting pending/approved requests; `submittedAt` is `serverTimestamp()`; `auditCreate` stamps.
+- [x] ~~EmployeeDetailView Leave tab placeholder~~ — **done 2026-06-10**: real history via `useLeaveRequestsFor(uid)` + balance card from `resolveBalances` with sick-tier breakdown.
+- [x] ~~Compliance logic lives in 4 places~~ — **done 2026-06-10**: single shared `src/hr/compliance.ts` consumed by AdminView, HRSystem, EmployeeDetailView, HRDirectory (the CF keeps its own copy until Phase 4 makes it the single source).
 
 ---
 
@@ -158,12 +160,13 @@ A line-by-line read of every source file found bugs that block real users today.
 1. [x] Hotfixes from 2.6.1 that overlap (sort bug, name bug, audit stamps, resolve notification) — **shipped 2026-06-10**
 2. [x] Submit form V2 (search-or-type issue picker, browse-by-group, duplicate guard, impact chips, camera capture, photo-optional description, in-page confirmation with ticket ref, My Reports list on the staff page) — **shipped 2026-06-10**
 3. [x] Queue V2 (My Jobs / Open Pool / All Active tabs, clickable stat cards, reporter name + description preview + building + aging chips on cards, duplicate grouping with per-row Mark-duplicate, walk-order grouping, claim with auto displayName, no more typed technician name, 7-day Reopen, detail-modal timeline, scheduled-tasks card via hook with computed due dates) — **shipped 2026-06-10**
-4. [x] Schedules fix — **shipped 2026-06-10**. [ ] Supervisor mini-dashboard — remaining.
+4. [x] Schedules fix — **shipped 2026-06-10**.
+5. [x] Supervisor mini-dashboard — **shipped 2026-06-10**: "Insights" tab in MaintenanceView (open-by-building bars, repeat-offender locations with root-cause flag, avg resolution time by category group, resolved-this-week by technician), computed client-side from the existing subscription.
+6. [x] `cancelled` status — **shipped 2026-06-10**: admin-only Cancel action (reason required) in the detail modal; excluded from active lists/stats like `duplicate`; `isActiveTicket()` helper centralizes the exclusion.
+7. [x] Notes thread — **shipped 2026-06-10**: `notesThread` array (`{byUid, byName, text, at}`) with add-note input in the detail modal; legacy `adminNotes` rendered as the first entry.
 
 **Deviations from the original spec (conscious):**
 - No separate `assigned` status — Claim = Start (`open → in_progress`); a small team doesn't need the extra state. Revisit if the team grows.
-- `cancelled` status not added yet (only `duplicate`); admin delete still covers the rare cancel case.
-- Notes thread (multi-note timeline) deferred — detail modal shows the status timeline; `adminNotes` remains a single field.
 
 **Out of scope for V2:** asset register/QR codes (Phase 5 #8), offline PWA drafts (Phase 3), parts inventory, vendor management.
 

@@ -29,7 +29,7 @@ import {
 // Helpers
 // ============================================================================
 
-async function loadActor(uid: string | undefined): Promise<ActorDoc | null> {
+export async function loadActor(uid: string | undefined): Promise<ActorDoc | null> {
   if (!uid) return null;
   const snap = await db.collection("users").doc(uid).get();
   if (!snap.exists) return null;
@@ -58,6 +58,19 @@ function requireString(v: unknown, field: string): string {
   return v.trim();
 }
 
+/**
+ * Last-Head-Admin guard (CLAUDE.md section 6): the system must never be left
+ * with zero active super_admins. Counts super_admins that can actually log in.
+ */
+async function countActiveSuperAdmins(): Promise<number> {
+  const snap = await db
+    .collection("users")
+    .where("role", "==", "super_admin")
+    .where("status", "==", "approved")
+    .get();
+  return snap.size;
+}
+
 // ============================================================================
 // deleteUser — hard-delete an account (auth + Firestore)
 // ============================================================================
@@ -84,6 +97,13 @@ export const deleteUser = onCall<{ uid: string }>(
         actor?.uid === target.uid
           ? "You cannot delete your own account."
           : "Only admins can delete users.",
+      );
+    }
+
+    if (target.role === "super_admin" && (await countActiveSuperAdmins()) <= 1) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Cannot delete the only remaining Head Admin.",
       );
     }
 
@@ -175,6 +195,17 @@ export const updateUserRole = onCall<{ uid: string; role: Role }>(
       return { ok: true, uid: targetUid, role: newRole, changed: false };
     }
 
+    if (
+      target.role === "super_admin" &&
+      newRole !== "super_admin" &&
+      (await countActiveSuperAdmins()) <= 1
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Cannot demote the only remaining Head Admin.",
+      );
+    }
+
     const before = { role: target.role };
     await db.collection("users").doc(targetUid).update({
       role: newRole,
@@ -236,6 +267,17 @@ export const updateUserStatus = onCall<{ uid: string; status: Status }>(
 
     if (beforeStatus === newStatus) {
       return { ok: true, uid: targetUid, status: newStatus, changed: false };
+    }
+
+    if (
+      target.role === "super_admin" &&
+      (newStatus === "suspended" || newStatus === "blocked") &&
+      (await countActiveSuperAdmins()) <= 1
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Cannot demote the only remaining Head Admin.",
+      );
     }
 
     const updates: Record<string, unknown> = {

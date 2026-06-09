@@ -50,3 +50,13 @@ export function useLeaveRequests(actor: Actor | null, statusFilter?: LeaveStatus
     { enabled: scope !== "none" },
   );
 }
+
+/** All leave requests for one specific employee (any status). */
+export function useLeaveRequestsFor(uid: string | null) {
+  return useFirestoreQuery<LeaveRequest>(
+    [...LEAVE_REQUESTS_KEY, "for", uid],
+    () => (uid ? query(collection(db, "leave_requests"), where("userId", "==", uid)) : null),
+    convert,
+    { enabled: Boolean(uid) },
+  );
+}

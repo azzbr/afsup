@@ -1,12 +1,14 @@
 import React, { useState, useMemo } from 'react';
-import { updateDoc, doc, serverTimestamp, deleteDoc, getDoc } from 'firebase/firestore';
+import { updateDoc, doc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { useQueryClient } from '@tanstack/react-query';
 import { db, functions } from './firebase';
+import { ROLE_LABELS } from './constants';
 import { actorFrom, can, assignableRoles } from './permissions';
-import { resolveBalances, debitLeave } from './hr/leave';
-import { useUsers } from './data/useUsers';
+import { complianceAlertsAll } from './hr/compliance';
+import { useUsers, USERS_KEY } from './data/useUsers';
 import { useScheduledTasks } from './data/useScheduledTasks';
-import { useLeaveRequests } from './data/useLeaveRequests';
+import { useLeaveRequests, LEAVE_REQUESTS_KEY } from './data/useLeaveRequests';
 import { auditUpdate } from './data/audit';
 import { getTimeOpen, computeScheduleDue } from './maintenance/ticketUtils';
 import {
@@ -23,15 +25,29 @@ const StatusBadge = ({ status }) => {
     open: "bg-red-50 text-red-700 border-red-100",
     in_progress: "bg-amber-50 text-amber-700 border-amber-100",
     resolved: "bg-emerald-50 text-emerald-700 border-emerald-100",
-    duplicate: "bg-slate-100 text-slate-500 border-slate-200"
+    duplicate: "bg-slate-100 text-slate-500 border-slate-200",
+    cancelled: "bg-slate-100 text-slate-500 border-slate-200"
   };
-  const labels = { open: 'Open', in_progress: 'In Progress', resolved: 'Resolved', duplicate: 'Duplicate' };
+  const labels = { open: 'Open', in_progress: 'In Progress', resolved: 'Resolved', duplicate: 'Duplicate', cancelled: 'Cancelled' };
 
   return (
     <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${styles[status] || styles.open}`}>
       {labels[status] || status}
     </span>
   );
+};
+
+// Role badge styling is data-driven (no role-string branching in JSX).
+// Head Admin gets the distinct indigo-700 treatment; everyone else keeps slate.
+const ROLE_BADGE_STYLES = {
+  super_admin: "bg-indigo-700 text-white",
+};
+const DEFAULT_ROLE_BADGE_STYLE = "bg-slate-100 text-slate-600";
+
+// Emphasis for the admin-tier options inside the change-role dropdown.
+const ROLE_OPTION_STYLES = {
+  admin: "font-bold text-red-600",
+  super_admin: "font-bold text-indigo-700",
 };
 
 const PriorityBadge = ({ priority }) => {
@@ -146,84 +162,6 @@ function TicketDetailModal({ isOpen, onClose, ticket }) {
   );
 }
 
-// ============================================================================
-// HR COMPLIANCE ALERTS (pure — module-scope)
-//
-// Operates on users where Timestamp fields have already been normalized to
-// JS Dates by useUsers().convertUser.
-// ============================================================================
-
-function calculateHRAlerts(users) {
-  const now = new Date();
-  const threeMonthsFromNow = new Date(); threeMonthsFromNow.setMonth(now.getMonth() + 3);
-  const oneMonthFromNow = new Date(); oneMonthFromNow.setMonth(now.getMonth() + 1);
-
-  const alerts = [];
-
-  users.forEach(u => {
-    // 1. CPR Expiry Check
-    if (u.cprExpiry instanceof Date) {
-      if (u.cprExpiry < now) {
-        alerts.push({
-          type: 'expired', priority: 'critical',
-          msg: `CPR EXPIRED: ${u.displayName || u.email}`,
-          employee: u.displayName,
-          detail: 'Immediate action required - suspend access if needed',
-        });
-      } else if (u.cprExpiry < threeMonthsFromNow) {
-        alerts.push({
-          type: 'warning', priority: 'warning',
-          msg: `CPR Expiring Soon: ${u.displayName || u.email}`,
-          employee: u.displayName,
-          detail: `Expires: ${u.cprExpiry.toLocaleDateString()}`,
-        });
-      }
-    }
-
-    // 2. VISA Expiry Check (non-Bahraini only)
-    if (u.nationality !== 'Bahraini' && u.residencePermitExpiry instanceof Date) {
-      if (u.residencePermitExpiry < now) {
-        alerts.push({
-          type: 'expired', priority: 'critical',
-          msg: `VISA EXPIRED: ${u.displayName || u.email}`,
-          employee: u.displayName,
-          detail: 'LMRA violations possible - legal action needed',
-        });
-      } else if (u.residencePermitExpiry < oneMonthFromNow) {
-        alerts.push({
-          type: 'warning', priority: 'warning',
-          msg: `Visa Expiring: ${u.displayName || u.email}`,
-          employee: u.displayName,
-          detail: `RP expires: ${u.residencePermitExpiry.toLocaleDateString()}`,
-        });
-      }
-    }
-
-    // 3. Bank IBAN Missing/Incomplete
-    if (!u.iban || !u.iban.startsWith('BH')) {
-      alerts.push({
-        type: 'incomplete', priority: 'info',
-        msg: `Missing/Invalid IBAN: ${u.displayName || u.email}`,
-        employee: u.displayName,
-        detail: 'WPS compliance requires complete IBAN for salary payments',
-      });
-    }
-
-    // 4. Arabic Name Missing (GOSI Requirement)
-    if (!u.arabicName && u.nationality === 'Bahraini') {
-      alerts.push({
-        type: 'incomplete', priority: 'info',
-        msg: `Arabic Name Missing: ${u.displayName || u.email}`,
-        employee: u.displayName,
-        detail: 'Required for GOSI & official Ministry documents',
-      });
-    }
-  });
-
-  const priorityOrder = { critical: 3, warning: 2, info: 1 };
-  return alerts.sort((a, b) => priorityOrder[b.priority] - priorityOrder[a.priority]);
-}
-
 // --- Main Admin View Component ---
 
 export default function AdminView({
@@ -250,7 +188,7 @@ export default function AdminView({
 
   // Live data — subscriptions auto-update after mutations.
   const actor = actorFrom(userData);
-  const { data: allUsers = [] } = useUsers(Boolean(userData));
+  const { data: allUsers = [] } = useUsers(actor, Boolean(userData));
   const { data: allSchedules = [] } = useScheduledTasks(Boolean(userData));
   const { data: pendingLeaveRequests = [] } = useLeaveRequests(actor, 'pending');
 
@@ -264,18 +202,18 @@ export default function AdminView({
       .map(u => ({ ...u, id: u.uid }));
   }, [allUsers, actor]);
 
-  const hrAlerts = useMemo(() => calculateHRAlerts(visibleUsers), [visibleUsers]);
+  // Shared compliance module (src/hr/compliance.ts) — same thresholds as the
+  // HR dashboard and the Cloud Function scan, sorted critical-first.
+  const hrAlerts = useMemo(() => complianceAlertsAll(visibleUsers), [visibleUsers]);
 
   // Mutations only need to read this once. Kept for back-compat with UI checks.
   const canManageUsers = can(actor, 'user.invite');
 
-  // No-op fetchData — kept to minimize churn in mutation handlers below.
-  // Subscriptions push fresh data automatically.
-  const fetchData = () => {};
+  const queryClient = useQueryClient();
 
-  // Tickets merged as duplicates are hidden from admin oversight entirely —
-  // excluded from both the stat cards and the table below.
-  const visibleTickets = tickets.filter(t => t.status !== 'duplicate');
+  // Tickets merged as duplicates or cancelled by the reporter are hidden from
+  // admin oversight entirely — excluded from both the stat cards and the table.
+  const visibleTickets = tickets.filter(t => t.status !== 'duplicate' && t.status !== 'cancelled');
 
   const ticketStats = visibleTickets.reduce((a, t) => {
     if (t.priority === 'critical' && t.status !== 'resolved') a.critical++;
@@ -443,50 +381,28 @@ export default function AdminView({
     }
   };
 
-  const processLeaveRequest = async (request, status) => {
+  // Leave decisions go through the decideLeaveRequest Cloud Function: it
+  // updates the request, debits the balance transactionally (no double-debit
+  // on double-approve), writes audit_log, and notifies the employee.
+  const processLeaveRequest = async (request, decision) => {
+    let reason;
+    if (decision === 'rejected') {
+      const input = window.prompt(`Reason for rejecting ${request.employeeName}'s leave request:`);
+      if (input === null) return; // cancelled the prompt
+      reason = input.trim() || undefined;
+    }
+
+    setActionLoading(`leave_${request.id}`);
     try {
-      const actionLoadingKey = `leave_${request.id}`;
+      const call = httpsCallable(functions, 'decideLeaveRequest');
+      await call({ requestId: request.id, decision, ...(reason ? { reason } : {}) });
 
-      // 1. Prevent duplicate processing
-      setActionLoading(actionLoadingKey);
+      // refetchType 'none': the onSnapshot subscriptions push fresh data; a
+      // real refetch would run the stub queryFn and clobber the cache with [].
+      queryClient.invalidateQueries({ queryKey: LEAVE_REQUESTS_KEY, refetchType: 'none' });
+      queryClient.invalidateQueries({ queryKey: USERS_KEY, refetchType: 'none' });
 
-      // 2. Update leave request status
-      await updateDoc(doc(db, 'leave_requests', request.id), {
-        status,
-        processedAt: serverTimestamp(),
-        processedBy: user.uid
-      });
-
-      // 3. If approved, debit the per-type balance (Phase 2.7).
-      //    Falls back to "annual" for legacy requests with no leaveType.
-      if (status === 'approved') {
-        const leaveType = request.leaveType || 'annual';
-        const days = request.daysRequested || 0;
-        const userRef = doc(db, 'users', request.userId);
-        const userDoc = await getDoc(userRef);
-
-        if (userDoc.exists() && leaveType !== 'unpaid' && leaveType !== 'study') {
-          const currentBalances = resolveBalances(userDoc.data());
-          const newBalances = debitLeave(currentBalances, leaveType, days);
-          const updates = {
-            leaveBalances: newBalances,
-            updatedAt: serverTimestamp(),
-            updatedBy: user.uid,
-          };
-          if (leaveType === 'annual') {
-            updates.annualLeaveBalance = Math.max(0, newBalances.annual.entitled - newBalances.annual.used);
-          } else if (leaveType === 'sick') {
-            updates.sickDaysUsed = newBalances.sick.used;
-          }
-          await updateDoc(userRef, updates);
-        }
-      }
-
-      // 4. Success message and refresh
-      const statusText = status === 'approved' ? 'Approved' : 'Rejected';
-      alert(`Leave request ${statusText.toLowerCase()} for ${request.employeeName}`);
-      await fetchData();
-
+      alert(`Leave request ${decision} for ${request.employeeName}`);
     } catch (error) {
       console.error('Error processing leave request:', error);
       alert('Error processing leave request: ' + error.message);
@@ -772,8 +688,8 @@ export default function AdminView({
                       <p className="text-xs text-slate-500">{u.email}</p>
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <span className="px-2 py-1 rounded bg-slate-100 text-slate-600 text-xs uppercase font-bold">
-                        {u.role || 'staff'}
+                      <span className={`px-2 py-1 rounded text-xs uppercase font-bold ${ROLE_BADGE_STYLES[u.role] || DEFAULT_ROLE_BADGE_STYLE}`}>
+                        {ROLE_LABELS[u.role] || ROLE_LABELS.staff}
                       </span>
                     </td>
                     {/* Everyone can see Phone Numbers (Directory) */}
@@ -818,7 +734,10 @@ export default function AdminView({
                                   type: 'user',
                                   data: { uid: u.id, role: u.role || 'staff' },
                                 });
-                                const canDelete = can(actor, 'user.delete');
+                                const canDelete = can(actor, 'user.delete', {
+                                  type: 'user',
+                                  data: { uid: u.id, role: u.role || 'staff' },
+                                });
                                 const rolesIMayAssign = assignableRoles(actor);
 
                                 return (
@@ -842,9 +761,9 @@ export default function AdminView({
                                                 <button
                                                   key={r}
                                                   onClick={() => updateRole(u.id, r)}
-                                                  className={`w-full text-left px-4 py-2 text-xs hover:bg-slate-50 capitalize ${r === 'admin' ? 'font-bold text-red-600' : ''}`}
+                                                  className={`w-full text-left px-4 py-2 text-xs hover:bg-slate-50 ${ROLE_OPTION_STYLES[r] || ''}`}
                                                 >
-                                                  {r}
+                                                  {ROLE_LABELS[r] || r}
                                                 </button>
                                               ))}
                                           </div>
@@ -958,13 +877,13 @@ export default function AdminView({
                 </div>
                 <div className="flex gap-2">
                    <button
-                     onClick={async () => { await updateDoc(doc(db, 'scheduled_tasks', s.id), { isActive: !s.isActive, ...auditUpdate(user.uid) }); fetchData(); }}
+                     onClick={async () => { await updateDoc(doc(db, 'scheduled_tasks', s.id), { isActive: !s.isActive, ...auditUpdate(user.uid) }); }}
                      className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600"
                    >
                      {s.isActive ? <Pause size={16} /> : <Play size={16} />}
                    </button>
                    <button
-                     onClick={async () => { if(confirm("Delete schedule?")) { await deleteDoc(doc(db, 'scheduled_tasks', s.id)); fetchData(); }}}
+                     onClick={async () => { if(confirm("Delete schedule?")) { await deleteDoc(doc(db, 'scheduled_tasks', s.id)); }}}
                      className="p-2 bg-red-50 hover:bg-red-100 rounded-lg text-red-600"
                    >
                      <Trash2 size={16} />
@@ -1001,7 +920,7 @@ export default function AdminView({
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-5 text-sm">
               <p className="font-medium text-slate-900">{deleteTarget.displayName}</p>
               <p className="text-slate-500 mt-0.5">{deleteTarget.email}</p>
-              <p className="text-xs text-slate-400 mt-2 capitalize">Role: {deleteTarget.role}</p>
+              <p className="text-xs text-slate-400 mt-2">Role: {ROLE_LABELS[deleteTarget.role] || deleteTarget.role}</p>
             </div>
 
             <div className="bg-red-50 border border-red-100 rounded-xl p-3 mb-5">
@@ -1104,23 +1023,26 @@ export default function AdminView({
                 </div>
               ) : (
                 hrAlerts.map((alert, i) => {
-                  const bgColor = alert.priority === 'critical' ? 'bg-red-50 border-red-200' :
-                                 alert.priority === 'warning' ? 'bg-amber-50 border-amber-200' :
-                                 'bg-slate-50 border-slate-200';
-
-                  const textColor = alert.priority === 'critical' ? 'text-red-800' :
-                                   alert.priority === 'warning' ? 'text-amber-800' :
-                                   'text-slate-800';
+                  const isCritical = alert.severity === 'critical';
+                  const bgColor = isCritical ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200';
+                  const textColor = isCritical ? 'text-red-800' : 'text-amber-800';
 
                   return (
                     <div key={i} className={`p-4 rounded-xl border ${bgColor} ${textColor}`}>
                       <div className="flex items-start gap-3">
-                        <div className={`p-2 rounded-full ${alert.priority === 'critical' ? 'bg-red-100' : alert.priority === 'warning' ? 'bg-amber-100' : 'bg-slate-100'}`}>
+                        <div className={`p-2 rounded-full ${isCritical ? 'bg-red-100' : 'bg-amber-100'}`}>
                           <AlertTriangle size={18} />
                         </div>
                         <div className="flex-1">
-                          <p className="font-medium text-sm">{alert.msg}</p>
-                          <p className="text-xs opacity-75 mt-1">{alert.detail}</p>
+                          <p className="font-medium text-sm">{alert.message}</p>
+                          <p className="text-xs opacity-75 mt-1 capitalize">
+                            {alert.type.replace(/_/g, ' ')}
+                            {typeof alert.daysAway === 'number' && (
+                              alert.daysAway < 0
+                                ? ` — ${Math.abs(alert.daysAway)} days overdue`
+                                : ` — ${alert.daysAway} days remaining`
+                            )}
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -1157,9 +1079,10 @@ export default function AdminView({
                           </span>
                         </div>
                         <div className="text-sm text-blue-700 mb-2">
-                          <span className="font-medium">From:</span> {request.leaveStart?.toDate?.()?.toLocaleDateString() || request.leaveStart}
+                          {/* Dates arrive as JS Dates via useLeaveRequests — never .toDate() */}
+                          <span className="font-medium">From:</span> {request.leaveStart?.toLocaleDateString() || '—'}
                           <span className="mx-2">→</span>
-                          <span className="font-medium">To:</span> {request.leaveEnd?.toDate?.()?.toLocaleDateString() || request.leaveEnd}
+                          <span className="font-medium">To:</span> {request.leaveEnd?.toLocaleDateString() || '—'}
                         </div>
                         {request.reason && (
                           <div className="text-sm text-blue-600 mb-2">
@@ -1167,7 +1090,7 @@ export default function AdminView({
                           </div>
                         )}
                         <div className="text-xs text-blue-500">
-                          Submitted: {request.submittedAt?.toDate?.()?.toLocaleDateString() || request.submittedAt}
+                          Submitted: {request.submittedAt?.toLocaleDateString() || '—'}
                         </div>
                       </div>
                       <div className="flex gap-2 ml-4">

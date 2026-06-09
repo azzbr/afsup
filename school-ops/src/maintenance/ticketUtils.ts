@@ -96,6 +96,29 @@ export function shortRef(id: string): string {
   return "#" + id.slice(-6).toUpperCase();
 }
 
+/** True when the ticket still needs work: not resolved, duplicate, or cancelled. */
+export function isActiveTicket(t: { status?: string }): boolean {
+  return t.status !== "resolved" && t.status !== "duplicate" && t.status !== "cancelled";
+}
+
+/**
+ * Mean hours from createdAt to resolvedAt across resolved tickets that have
+ * both dates. Null when no ticket qualifies.
+ */
+export function averageResolutionHours(
+  tickets: { status?: string; createdAt?: Date | null; resolvedAt?: Date | null }[],
+): number | null {
+  let totalHours = 0;
+  let count = 0;
+  for (const t of tickets) {
+    if (t.status !== "resolved") continue;
+    if (!(t.createdAt instanceof Date) || !(t.resolvedAt instanceof Date)) continue;
+    totalHours += (t.resolvedAt.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60);
+    count++;
+  }
+  return count === 0 ? null : totalHours / count;
+}
+
 // ============================================================================
 // DUPLICATE GROUPING
 // ============================================================================

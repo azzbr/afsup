@@ -4,17 +4,19 @@
 // and offers a one-click CSV download (UTF-8 with BOM so Excel reads Arabic).
 //
 // All computation is client-side from the already-loaded users + EOSG math.
-// For Bahrain-specific submission formats (GOSI portal, WPS SIF) the CSV is
-// pragmatic — HR should map columns into the latest official template before
-// upload. See hr/reports.ts for the exact field lists.
+// For Bahrain-specific submission formats (GOSI portal, WPS via the LMRA EMS
+// portal) the CSV is pragmatic — HR should map columns into the latest
+// official template before upload. See hr/reports.ts for the exact field
+// lists. GOSI rates come live from school_settings (Head Admin editable).
 
 import React, { useMemo } from 'react';
 import { FileText, Download, AlertTriangle, Users, Banknote, ShieldCheck } from 'lucide-react';
 
 import { computeEOSG, totalLiability } from '../hr/eosg';
+import { useSchoolSettings, effectiveSettings } from '../data/useSchoolSettings';
 import {
   gosiSubmissionReport,
-  wpsSifReport,
+  wpsLmraReport,
   expiryWatchlistReport,
   eosgLiabilityReport,
   downloadReport,
@@ -69,21 +71,42 @@ function ReportCard({ icon: Icon, color, title, description, stats, onDownload, 
   );
 }
 
+const pct = (rate) => `${+(rate * 100).toFixed(2)}%`;
+
 export default function HRReports({ employees }) {
+  const settings = effectiveSettings(useSchoolSettings().data);
+  const gosiRates = settings.gosi;
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const ninetyDays = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000);
 
   const gosiStats = useMemo(() => {
-    const bahrainis = employees.filter((u) => u.nationality === 'Bahraini' && num(u.basicSalary) > 0);
-    const totalBasic = bahrainis.reduce((s, u) => s + num(u.basicSalary), 0);
+    const insured = employees.filter(
+      (u) => u.status !== 'blocked' && u.status !== 'suspended' && num(u.basicSalary) > 0,
+    );
+    let totalBasic = 0;
+    let employeeTotal = 0;
+    let employerTotal = 0;
+    let bahrainiCount = 0;
+    for (const u of insured) {
+      const basic = num(u.basicSalary);
+      const isBahraini = u.nationality === 'Bahraini';
+      const rates = isBahraini ? gosiRates.bahraini : gosiRates.expat;
+      if (isBahraini) bahrainiCount++;
+      totalBasic += basic;
+      employeeTotal += basic * rates.employeeRate;
+      employerTotal += basic * rates.employerRate;
+    }
     return {
-      count: bahrainis.length,
+      count: insured.length,
+      bahrainiCount,
+      expatCount: insured.length - bahrainiCount,
       totalBasic,
-      employee5: totalBasic * 0.05,
-      employer12: totalBasic * 0.12,
+      employeeTotal,
+      employerTotal,
     };
-  }, [employees]);
+  }, [employees, gosiRates]);
 
   const wpsStats = useMemo(() => {
     const payable = employees.filter(
@@ -152,29 +175,29 @@ export default function HRReports({ employees }) {
           icon={ShieldCheck}
           color="bg-emerald-100 text-emerald-600"
           title="GOSI Monthly Submission"
-          description="Bahraini employees with basic salary breakdown for GOSI portal upload."
+          description={`All active employees for GOSI portal upload. Rates: Bahraini ${pct(gosiRates.bahraini.employeeRate)} employee + ${pct(gosiRates.bahraini.employerRate)} employer, expat ${pct(gosiRates.expat.employeeRate)} + ${pct(gosiRates.expat.employerRate)}.`}
           stats={[
-            { label: 'Bahraini employees', value: gosiStats.count },
+            { label: 'Employees included', value: `${gosiStats.count} (${gosiStats.bahrainiCount} Bahraini / ${gosiStats.expatCount} expat)` },
             { label: 'Total basic payroll', value: fmtBHD(gosiStats.totalBasic) },
-            { label: 'Employee contributions (5%)', value: fmtBHD(gosiStats.employee5) },
-            { label: 'Employer contributions (12%)', value: fmtBHD(gosiStats.employer12) },
+            { label: 'Employee contributions', value: fmtBHD(gosiStats.employeeTotal) },
+            { label: 'Employer contributions', value: fmtBHD(gosiStats.employerTotal) },
           ]}
-          onDownload={() => downloadReport(gosiSubmissionReport(employees))}
+          onDownload={() => downloadReport(gosiSubmissionReport(employees, gosiRates))}
           disabled={gosiStats.count === 0}
-          disabledReason="No Bahraini employees with basic salary set"
+          disabledReason="No active employees with basic salary set"
         />
 
         <ReportCard
           icon={Banknote}
           color="bg-blue-100 text-blue-600"
-          title="WPS Salary Information File"
-          description="Monthly payroll for bank upload. Maps to most Bahraini bank SIF templates."
+          title="WPS LMRA CSV (approximation)"
+          description="Monthly payroll for upload via the LMRA EMS portal (Bahrain WPS 2.0). Map columns to the latest LMRA template."
           stats={[
             { label: 'Payable employees', value: wpsStats.count },
             { label: 'Total gross payroll', value: fmtBHD(wpsStats.totalGross) },
             { label: 'Skipped (no IBAN/salary)', value: wpsStats.ineligible },
           ]}
-          onDownload={() => downloadReport(wpsSifReport(employees))}
+          onDownload={() => downloadReport(wpsLmraReport(employees))}
           disabled={wpsStats.count === 0}
           disabledReason="No employees with valid IBAN and salary"
         />
@@ -214,9 +237,9 @@ export default function HRReports({ employees }) {
         <div>
           <p className="font-bold mb-1">Before submitting GOSI or WPS</p>
           <p className="text-amber-700">
-            These CSVs include the universally required fields. Bahrain GOSI and bank SIF templates
+            These CSVs include the universally required fields. Bahrain GOSI and LMRA WPS templates
             change periodically — open the CSV in Excel, map columns to the latest official template,
-            then upload. Always cross-check totals before final submission.
+            then upload via the relevant portal. Always cross-check totals before final submission.
           </p>
         </div>
       </div>

@@ -44,8 +44,10 @@ export function canAssignRole(actor: ActorDoc | null, targetRole: Role): boolean
 
 /**
  * Can `actor` change `target`'s role or status?
- * - admin: yes (anyone, any value)
- * - HR: only if target is NOT an admin
+ * - super_admin: anyone (any value)
+ * - admin: only non-admin targets (matrix: "Edit role/status of admins" is
+ *   super_admin only)
+ * - HR: only if target is NOT an admin / super_admin
  * - others: never
  *
  * Self-edits are blocked here as a safety rail — even an admin shouldn't
@@ -59,14 +61,18 @@ export function canEditUserRoleOrStatus(
   if (actor.uid === target.uid) return false;
   if (actor.role === "super_admin") return true;
   if (actor.role === "admin" || actor.viewAll === true) {
-    // Regular admin cannot edit another super_admin.
-    return target.role !== "super_admin";
+    // Plain admin cannot edit another admin or a super_admin.
+    return target.role !== "admin" && target.role !== "super_admin";
   }
   if (actor.role === "hr") return target.role !== "admin" && target.role !== "super_admin";
   return false;
 }
 
-/** admin and super_admin can delete users. Self-delete is blocked. */
+/**
+ * admin and super_admin can delete users. Self-delete is blocked, and a
+ * plain admin cannot delete the admin/super_admin tier (matrix: "Delete
+ * admin or super_admin" is super_admin only).
+ */
 export function canDeleteUser(
   actor: ActorDoc | null,
   target: { uid: string; role?: Role } | null,
@@ -75,8 +81,7 @@ export function canDeleteUser(
   if (actor.uid === target.uid) return false;
   if (actor.role === "super_admin") return true;
   if (actor.role === "admin" || actor.viewAll === true) {
-    // Regular admin cannot delete a super_admin.
-    return target.role !== "super_admin";
+    return target.role !== "admin" && target.role !== "super_admin";
   }
   return false;
 }

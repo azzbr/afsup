@@ -1,13 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
-import { NATIONALITIES, BAHRAIN_BANKS, SICK_LEAVE_TIERS } from '../constants';
+import { doc, updateDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { useQueryClient } from '@tanstack/react-query';
+import { db, functions } from '../firebase';
 import {
-  User, Mail, Phone, MapPin, Calendar, CreditCard, FileText, Shield,
-  Briefcase, Globe, Heart, AlertTriangle, CheckCircle, Clock, X,
+  NATIONALITIES, BAHRAIN_BANKS, SICK_LEAVE_TIERS, USER_STATUSES,
+  ROLE_LABELS, LEAVE_TYPE_LABELS
+} from '../constants';
+import { actorFrom, can, assignableRoles } from '../permissions';
+import { auditUpdate } from '../data/audit';
+import { USERS_KEY } from '../data/useUsers';
+import { useLeaveRequestsFor } from '../data/useLeaveRequests';
+import { complianceAlertsFor } from '../hr/compliance';
+import { resolveBalances, sickLeaveBreakdown, remainingDays } from '../hr/leave';
+import {
+  User, Mail, Phone, Calendar, CreditCard, FileText, Shield,
+  Briefcase, Globe, Heart, AlertTriangle, CheckCircle, Clock,
   BadgeCheck, Building2, ChevronLeft, Edit3, Save, Trash2, Lock,
-  DollarSign, Plane, Activity, Eye, UploadCloud, Download, Printer,
-  UserCheck, UserX, Ban, RefreshCw, History, MessageSquare
+  DollarSign, Plane, Activity, Eye, Printer,
+  UserCheck, UserX, Ban, RefreshCw, History
 } from 'lucide-react';
 
 // ============================================================================
@@ -49,10 +60,11 @@ const InfoField = ({ label, value, icon: Icon, isHighlighted, isMono, isRTL }) =
 
 const StatusBadge = ({ status }) => {
   const styles = {
-    approved: { bg: 'bg-emerald-500', text: 'text-white', icon: CheckCircle, label: 'Active' },
+    invited: { bg: 'bg-sky-500', text: 'text-white', icon: Mail, label: 'Invited' },
     pending: { bg: 'bg-amber-500', text: 'text-white', icon: Clock, label: 'Pending' },
-    suspended: { bg: 'bg-red-500', text: 'text-white', icon: Ban, label: 'Suspended' },
-    terminated: { bg: 'bg-slate-500', text: 'text-white', icon: UserX, label: 'Terminated' }
+    approved: { bg: 'bg-emerald-500', text: 'text-white', icon: CheckCircle, label: 'Active' },
+    suspended: { bg: 'bg-orange-500', text: 'text-white', icon: Ban, label: 'Suspended' },
+    blocked: { bg: 'bg-red-600', text: 'text-white', icon: UserX, label: 'Blocked' }
   };
   const style = styles[status] || styles.pending;
   const Icon = style.icon;
@@ -70,68 +82,29 @@ const StatusBadge = ({ status }) => {
 // ============================================================================
 
 const ComplianceAlerts = ({ employee }) => {
-  const alerts = [];
-  const now = new Date();
-  const threeMonths = new Date(); threeMonths.setMonth(now.getMonth() + 3);
-  const oneMonth = new Date(); oneMonth.setMonth(now.getMonth() + 1);
-  
-  // CPR Check
-  if (employee.cprExpiry?.toDate) {
-    const expiry = employee.cprExpiry.toDate();
-    if (expiry < now) {
-      alerts.push({ type: 'critical', icon: AlertTriangle, title: 'CPR EXPIRED', detail: `Expired on ${expiry.toLocaleDateString()}` });
-    } else if (expiry < threeMonths) {
-      alerts.push({ type: 'warning', icon: Clock, title: 'CPR Expiring Soon', detail: `Expires on ${expiry.toLocaleDateString()}` });
-    }
-  }
-  
-  // Visa Check (Non-Bahrainis)
-  if (employee.nationality !== 'Bahraini' && employee.residencePermitExpiry?.toDate) {
-    const expiry = employee.residencePermitExpiry.toDate();
-    if (expiry < now) {
-      alerts.push({ type: 'critical', icon: AlertTriangle, title: 'VISA EXPIRED', detail: `LMRA violation - expired on ${expiry.toLocaleDateString()}` });
-    } else if (expiry < oneMonth) {
-      alerts.push({ type: 'warning', icon: Clock, title: 'Visa Expiring', detail: `Expires on ${expiry.toLocaleDateString()}` });
-    }
-  }
-  
-  // Passport Check
-  if (employee.passportExpiry?.toDate) {
-    const expiry = employee.passportExpiry.toDate();
-    if (expiry < threeMonths) {
-      alerts.push({ type: 'warning', icon: FileText, title: 'Passport Expiring', detail: `Expires on ${expiry.toLocaleDateString()}` });
-    }
-  }
-  
-  // Banking Check
-  if (!employee.iban || !employee.iban.startsWith('BH')) {
-    alerts.push({ type: 'info', icon: CreditCard, title: 'Missing/Invalid IBAN', detail: 'WPS compliance requires valid Bahrain IBAN' });
-  }
-  
-  // Arabic Name (GOSI)
-  if (!employee.arabicName && employee.nationality === 'Bahraini') {
-    alerts.push({ type: 'info', icon: FileText, title: 'Arabic Name Missing', detail: 'Required for GOSI & Ministry documents' });
-  }
-  
+  const alerts = complianceAlertsFor(employee);
+
   if (alerts.length === 0) return null;
-  
+
   return (
     <div className="mb-6 space-y-3">
       {alerts.map((alert, i) => {
-        const bgColor = alert.type === 'critical' ? 'bg-red-50 border-red-200' :
-                       alert.type === 'warning' ? 'bg-amber-50 border-amber-200' :
-                       'bg-blue-50 border-blue-200';
-        const textColor = alert.type === 'critical' ? 'text-red-800' :
-                         alert.type === 'warning' ? 'text-amber-800' :
-                         'text-blue-800';
-        const Icon = alert.icon;
-        
+        const isCritical = alert.severity === 'critical';
+        const Icon = isCritical ? AlertTriangle : Clock;
+        const tone = isCritical ? 'bg-red-50 border-red-200 text-red-800' : 'bg-amber-50 border-amber-200 text-amber-800';
+
         return (
-          <div key={i} className={`flex items-start gap-3 p-4 rounded-xl border ${bgColor}`}>
-            <Icon size={20} className={textColor} />
+          <div key={`${alert.type}-${i}`} className={`flex items-start gap-3 p-4 rounded-xl border ${tone}`}>
+            <Icon size={20} className="shrink-0" />
             <div>
-              <p className={`font-bold text-sm ${textColor}`}>{alert.title}</p>
-              <p className={`text-sm opacity-80 ${textColor}`}>{alert.detail}</p>
+              <p className="font-bold text-sm">{alert.message}</p>
+              {typeof alert.daysAway === 'number' && (
+                <p className="text-sm opacity-80">
+                  {alert.daysAway < 0
+                    ? `${Math.abs(alert.daysAway)} days overdue`
+                    : `${alert.daysAway} days remaining`}
+                </p>
+              )}
             </div>
           </div>
         );
@@ -145,44 +118,124 @@ const ComplianceAlerts = ({ employee }) => {
 // ============================================================================
 
 const LeaveBalanceCard = ({ employee }) => {
-  const annualBalance = employee.annualLeaveBalance || 30;
-  const sickUsed = employee.sickDaysUsed || 0;
-  
-  // Bahrain Labor Law Sick Leave Calculation
-  const fullPayBalance = Math.max(0, SICK_LEAVE_TIERS.FULL_PAY - Math.min(sickUsed, SICK_LEAVE_TIERS.FULL_PAY));
-  const halfPayUsed = Math.max(0, sickUsed - SICK_LEAVE_TIERS.FULL_PAY);
-  const halfPayBalance = Math.max(0, SICK_LEAVE_TIERS.HALF_PAY - Math.min(halfPayUsed, SICK_LEAVE_TIERS.HALF_PAY));
-  
+  const balances = resolveBalances(employee);
+  const annualRemaining = remainingDays(balances.annual);
+  const sick = sickLeaveBreakdown(balances.sick.used);
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       {/* Annual Leave */}
       <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl p-5 text-white">
         <div className="flex items-center gap-2 mb-2 opacity-80">
           <Plane size={18} />
           <span className="text-sm font-medium">Annual Leave</span>
         </div>
-        <p className="text-4xl font-bold">{annualBalance}</p>
-        <p className="text-sm opacity-70">days remaining</p>
+        <p className="text-4xl font-bold">{annualRemaining}</p>
+        <p className="text-sm opacity-70">of {balances.annual.entitled} days remaining</p>
       </div>
-      
+
       {/* Sick Leave - Full Pay */}
       <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-5 text-white">
         <div className="flex items-center gap-2 mb-2 opacity-80">
           <Activity size={18} />
           <span className="text-sm font-medium">Sick (Full Pay)</span>
         </div>
-        <p className="text-4xl font-bold">{fullPayBalance}</p>
+        <p className="text-4xl font-bold">{sick.fullPayRemaining}</p>
         <p className="text-sm opacity-70">of {SICK_LEAVE_TIERS.FULL_PAY} days</p>
       </div>
-      
+
       {/* Sick Leave - Half Pay */}
       <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl p-5 text-white">
         <div className="flex items-center gap-2 mb-2 opacity-80">
           <Activity size={18} />
           <span className="text-sm font-medium">Sick (Half Pay)</span>
         </div>
-        <p className="text-4xl font-bold">{halfPayBalance}</p>
+        <p className="text-4xl font-bold">{sick.halfPayRemaining}</p>
         <p className="text-sm opacity-70">of {SICK_LEAVE_TIERS.HALF_PAY} days</p>
+      </div>
+
+      {/* Sick Leave - Unpaid */}
+      <div className="bg-gradient-to-br from-slate-500 to-slate-600 rounded-2xl p-5 text-white">
+        <div className="flex items-center gap-2 mb-2 opacity-80">
+          <Activity size={18} />
+          <span className="text-sm font-medium">Sick (Unpaid)</span>
+        </div>
+        <p className="text-4xl font-bold">{sick.unpaidRemaining}</p>
+        <p className="text-sm opacity-70">of {SICK_LEAVE_TIERS.NO_PAY} days</p>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// LEAVE HISTORY TABLE
+// ============================================================================
+
+const LEAVE_STATUS_CHIP = {
+  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  approved: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  rejected: 'bg-red-50 text-red-700 border-red-200'
+};
+
+const fmtLeaveDate = (d) =>
+  d instanceof Date && !isNaN(d.getTime())
+    ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+    : '—';
+
+const LeaveHistory = ({ requests, isLoading }) => {
+  if (isLoading) {
+    return (
+      <div className="bg-slate-50 rounded-xl p-8 text-center border border-slate-100">
+        <p className="text-slate-400 font-medium">Loading leave history...</p>
+      </div>
+    );
+  }
+
+  if (requests.length === 0) {
+    return (
+      <div className="bg-slate-50 rounded-xl p-8 text-center border border-slate-100">
+        <Calendar size={48} className="text-slate-300 mx-auto mb-4" />
+        <p className="text-slate-500 font-medium">No leave history available</p>
+        <p className="text-sm text-slate-400">Leave requests will appear here once submitted</p>
+      </div>
+    );
+  }
+
+  const sorted = [...requests].sort(
+    (a, b) => (b.submittedAt?.getTime() || 0) - (a.submittedAt?.getTime() || 0)
+  );
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="bg-slate-50 border-b border-slate-200">
+              <th className="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Type</th>
+              <th className="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Dates</th>
+              <th className="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Days</th>
+              <th className="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {sorted.map((request) => (
+              <tr key={request.id}>
+                <td className="px-4 py-3 text-sm font-medium text-slate-700">
+                  {LEAVE_TYPE_LABELS[request.leaveType || 'annual'] || request.leaveType}
+                </td>
+                <td className="px-4 py-3 text-sm text-slate-600">
+                  {fmtLeaveDate(request.leaveStart)} - {fmtLeaveDate(request.leaveEnd)}
+                </td>
+                <td className="px-4 py-3 text-sm text-slate-600">{request.daysRequested || '—'}</td>
+                <td className="px-4 py-3">
+                  <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold border capitalize ${LEAVE_STATUS_CHIP[request.status] || LEAVE_STATUS_CHIP.pending}`}>
+                    {request.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -251,65 +304,108 @@ const DocumentsSection = ({ employee, canEdit }) => {
 // MAIN EMPLOYEE DETAIL VIEW COMPONENT
 // ============================================================================
 
+// The only fields the edit form touches. Saves diff against these so an
+// untouched (or empty-initialized) input can never overwrite stored data.
+const EDITABLE_TEXT_FIELDS = [
+  'firstName', 'middleName', 'lastName', 'arabicName', 'nationality', 'gender',
+  'maritalStatus', 'phoneNumber', 'cprNumber', 'passportNumber',
+  'residencePermitNumber', 'workPermitNumber', 'bankName', 'iban'
+];
+const EDITABLE_DATE_FIELDS = ['cprExpiry', 'passportExpiry', 'residencePermitExpiry', 'dateOfJoining'];
+
+// JS Date -> yyyy-mm-dd for <input type="date">; '' when unset. Uses local
+// date components (not toISOString) so the day never shifts across timezones.
+const toInputDate = (d) => {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+};
+
+const STATUS_ACTIONS = {
+  invited: { icon: Mail, label: 'Invited', classes: 'bg-sky-50 hover:bg-sky-100 border-sky-200 text-sky-700' },
+  pending: { icon: Clock, label: 'Pending', classes: 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-700' },
+  approved: { icon: UserCheck, label: 'Approve', classes: 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700' },
+  suspended: { icon: Ban, label: 'Suspend', classes: 'bg-orange-50 hover:bg-orange-100 border-orange-200 text-orange-700' },
+  blocked: { icon: UserX, label: 'Block', classes: 'bg-red-50 hover:bg-red-100 border-red-200 text-red-700' }
+};
+
 export default function EmployeeDetailView({ employee, onClose, user, userData, onUpdate }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState({});
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
-  
-  const canEdit = ['admin', 'hr'].includes(userData?.role);
-  const isAdmin = userData?.role === 'admin';
-  
-  // Format date helper
+  const queryClient = useQueryClient();
+
+  const employeeUid = employee?.uid || employee?.id;
+  const { data: leaveRequests = [], isLoading: leaveLoading } = useLeaveRequestsFor(employeeUid ?? null);
+
+  const actor = actorFrom(userData);
+  const userTarget = employee
+    ? { type: 'user', data: { uid: employeeUid, role: employee.role || 'staff' } }
+    : undefined;
+  const canChangeStatus = can(actor, 'user.edit.status', userTarget);
+  const canChangeRole = can(actor, 'user.edit.role', userTarget);
+  const canDelete = can(actor, 'user.delete', userTarget);
+  // Whoever manages this person's account lifecycle also maintains their HR
+  // record fields. Salary/leave-balance edits would additionally need
+  // can(actor, 'user.edit.salary', userTarget) — no such inputs exist here yet.
+  const canEdit = canChangeStatus;
+  const showAdminTab = canChangeStatus || canChangeRole || canDelete;
+  const roleOptions = assignableRoles(actor);
+
+  // Format date helper — hook data is already JS Dates, never Timestamps
   const formatDate = (d) => {
-    if (!d) return null;
-    if (d.toDate) return d.toDate().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-    return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    if (!(d instanceof Date) || isNaN(d.getTime())) return null;
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   };
-  
+
   // Calculate tenure
   const calculateTenure = () => {
-    if (!employee.dateOfJoining?.toDate) return null;
-    const joinDate = employee.dateOfJoining.toDate();
+    const joinDate = employee?.dateOfJoining;
+    if (!(joinDate instanceof Date) || isNaN(joinDate.getTime())) return null;
     const now = new Date();
     const years = Math.floor((now - joinDate) / (365.25 * 24 * 60 * 60 * 1000));
     const months = Math.floor(((now - joinDate) % (365.25 * 24 * 60 * 60 * 1000)) / (30.44 * 24 * 60 * 60 * 1000));
     if (years > 0) return `${years}y ${months}m`;
     return `${months} months`;
   };
-  
-  // Initialize edit data
+
+  // Initialize edit data — only the editable fields, never the whole doc
   useEffect(() => {
-    if (employee) {
-      const fmt = (d) => d?.toDate ? d.toDate().toISOString().split('T')[0] : '';
-      setEditData({
-        ...employee,
-        cprExpiry: fmt(employee.cprExpiry),
-        passportExpiry: fmt(employee.passportExpiry),
-        residencePermitExpiry: fmt(employee.residencePermitExpiry),
-        dateOfJoining: fmt(employee.dateOfJoining)
-      });
-    }
+    if (!employee) return;
+    const next = {};
+    for (const field of EDITABLE_TEXT_FIELDS) next[field] = employee[field] || '';
+    for (const field of EDITABLE_DATE_FIELDS) next[field] = toInputDate(employee[field]);
+    setEditData(next);
   }, [employee]);
   
-  // Handle save
+  // Handle save — write ONLY the fields that actually changed
   const handleSave = async () => {
     setLoading(true);
     try {
-      const updates = {
-        ...editData,
-        cprExpiry: editData.cprExpiry ? new Date(editData.cprExpiry) : null,
-        passportExpiry: editData.passportExpiry ? new Date(editData.passportExpiry) : null,
-        residencePermitExpiry: editData.residencePermitExpiry ? new Date(editData.residencePermitExpiry) : null,
-        dateOfJoining: editData.dateOfJoining ? new Date(editData.dateOfJoining) : null,
-        updatedAt: serverTimestamp(),
-        updatedBy: user.uid
-      };
-      
-      await updateDoc(doc(db, 'users', employee.id), updates);
+      const updates = {};
+      for (const field of EDITABLE_TEXT_FIELDS) {
+        const next = editData[field] ?? '';
+        if (next !== (employee[field] || '')) updates[field] = next;
+      }
+      for (const field of EDITABLE_DATE_FIELDS) {
+        const next = editData[field] || '';
+        if (next === toInputDate(employee[field])) continue;
+        // Date inputs hold yyyy-mm-dd strings; Firestore stores JS Dates as
+        // Timestamps. Null only when the user deliberately cleared a value.
+        updates[field] = next ? new Date(next) : null;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await updateDoc(doc(db, 'users', employeeUid), {
+          ...updates,
+          ...auditUpdate(user.uid)
+        });
+        queryClient.invalidateQueries({ queryKey: USERS_KEY });
+      }
       setIsEditing(false);
       if (onUpdate) onUpdate();
-      alert('Employee profile updated successfully!');
     } catch (error) {
       console.error('Update error:', error);
       alert('Error updating profile: ' + error.message);
@@ -317,64 +413,59 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
       setLoading(false);
     }
   };
-  
-  // Handle status change
+
+  // Status, role, and delete go through Cloud Functions: firestore.rules make
+  // role/status immutable from the client and deny user doc deletes. The
+  // callables validate permission server-side and write audit_log atomically.
+
   const handleStatusChange = async (newStatus) => {
     if (!confirm(`Are you sure you want to change status to "${newStatus}"?`)) return;
-    
+
     setLoading(true);
     try {
-      await updateDoc(doc(db, 'users', employee.id), {
-        status: newStatus,
-        [`${newStatus}At`]: serverTimestamp(),
-        updatedBy: user.uid,
-        isActive: newStatus === 'approved'
-      });
+      const call = httpsCallable(functions, 'updateUserStatus');
+      await call({ uid: employeeUid, status: newStatus });
+      queryClient.invalidateQueries({ queryKey: USERS_KEY });
       if (onUpdate) onUpdate();
-      alert(`Status changed to ${newStatus}`);
     } catch (error) {
-      console.error('Status change error:', error);
-      alert('Error changing status: ' + error.message);
+      console.error('Status change failed:', error);
+      alert(`Could not change status: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
-  
-  // Handle role change
+
   const handleRoleChange = async (newRole) => {
-    if (!confirm(`Change role to "${newRole}"?`)) return;
-    
+    if (!confirm(`Change role to "${ROLE_LABELS[newRole] || newRole}"?`)) return;
+
     setLoading(true);
     try {
-      await updateDoc(doc(db, 'users', employee.id), {
-        role: newRole,
-        updatedBy: user.uid,
-        updatedAt: serverTimestamp()
-      });
+      const call = httpsCallable(functions, 'updateUserRole');
+      await call({ uid: employeeUid, role: newRole });
+      queryClient.invalidateQueries({ queryKey: USERS_KEY });
       if (onUpdate) onUpdate();
-      alert(`Role changed to ${newRole}`);
     } catch (error) {
-      console.error('Role change error:', error);
-      alert('Error changing role: ' + error.message);
+      console.error('Role change failed:', error);
+      alert(`Could not change role: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
-  
-  // Handle delete
+
   const handleDelete = async () => {
-    if (!confirm('⚠️ DELETE THIS USER PERMANENTLY?\n\nThis action cannot be undone!')) return;
-    if (!confirm('Are you absolutely sure? Type "yes" in the next prompt.')) return;
-    
+    const name = employee.displayName || `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.email;
+    if (!confirm(`Permanently delete ${name}?\n\nThis removes their account and cannot be undone.`)) return;
+
     setLoading(true);
     try {
-      await deleteDoc(doc(db, 'users', employee.id));
+      const call = httpsCallable(functions, 'deleteUser');
+      await call({ uid: employeeUid });
+      queryClient.invalidateQueries({ queryKey: USERS_KEY });
       if (onUpdate) onUpdate();
       onClose();
-      alert('User deleted successfully');
     } catch (error) {
-      console.error('Delete error:', error);
-      alert('Error deleting user: ' + error.message);
+      console.error('Delete failed:', error);
+      alert(`Could not delete user: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -391,7 +482,7 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
     { id: 'documents', label: 'Documents', icon: FileText },
     { id: 'employment', label: 'Employment', icon: Briefcase },
     { id: 'leave', label: 'Leave & Attendance', icon: Calendar },
-    ...(canEdit ? [{ id: 'admin', label: 'Admin Actions', icon: Shield }] : [])
+    ...(showAdminTab ? [{ id: 'admin', label: 'Admin Actions', icon: Shield }] : [])
   ];
   
   return (
@@ -443,7 +534,11 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
                   </button>
                 </>
               )}
-              <button className="p-2 bg-white/10 hover:bg-white/20 rounded-xl transition-colors">
+              <button
+                onClick={() => window.print()}
+                title="Print profile"
+                className="p-2 bg-white/10 hover:bg-white/20 rounded-xl transition-colors"
+              >
                 <Printer size={18} />
               </button>
             </div>
@@ -497,7 +592,7 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
             {/* Role Badge */}
             <div className="md:text-right">
               <span className="inline-block px-4 py-2 bg-white/10 rounded-xl text-sm font-bold uppercase tracking-wide">
-                {employee.role || 'Staff'}
+                {ROLE_LABELS[employee.role] || ROLE_LABELS.staff}
               </span>
             </div>
           </div>
@@ -795,7 +890,7 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
                   <>
                     <InfoField icon={Calendar} label="Date of Joining" value={formatDate(employee.dateOfJoining)} isHighlighted />
                     <InfoField icon={Clock} label="Tenure" value={tenure || 'Not available'} />
-                    <InfoField icon={Shield} label="Current Role" value={employee.role?.toUpperCase() || 'STAFF'} />
+                    <InfoField icon={Shield} label="Current Role" value={ROLE_LABELS[employee.role] || ROLE_LABELS.staff} />
                     <InfoField icon={CheckCircle} label="Account Status" value={employee.status?.toUpperCase() || 'PENDING'} />
                     <InfoField icon={Calendar} label="Created At" value={formatDate(employee.createdAt)} />
                     <InfoField icon={RefreshCw} label="Last Updated" value={formatDate(employee.updatedAt)} />
@@ -816,96 +911,77 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
             
             <section>
               <SectionHeader icon={History} title="Leave History" subtitle="Past leave requests and approvals" />
-              <div className="bg-slate-50 rounded-xl p-8 text-center border border-slate-100">
-                <Calendar size={48} className="text-slate-300 mx-auto mb-4" />
-                <p className="text-slate-500 font-medium">No leave history available</p>
-                <p className="text-sm text-slate-400">Leave requests will appear here once submitted</p>
-              </div>
+              <LeaveHistory requests={leaveRequests} isLoading={leaveLoading} />
             </section>
           </div>
         )}
         
         {/* Admin Actions Tab */}
-        {activeTab === 'admin' && canEdit && (
+        {activeTab === 'admin' && showAdminTab && (
           <div className="space-y-8">
             {/* Status Management */}
-            <section>
-              <SectionHeader 
-                icon={Shield} 
-                title="Account Status Management" 
-                subtitle="Approve, suspend, or terminate employee accounts" 
-              />
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <button
-                  onClick={() => handleStatusChange('approved')}
-                  disabled={loading || employee.status === 'approved'}
-                  className="p-4 bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-200 rounded-xl text-emerald-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-2"
-                >
-                  <UserCheck size={24} />
-                  <span>Approve</span>
-                </button>
-                <button
-                  onClick={() => handleStatusChange('pending')}
-                  disabled={loading || employee.status === 'pending'}
-                  className="p-4 bg-amber-50 hover:bg-amber-100 border-2 border-amber-200 rounded-xl text-amber-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-2"
-                >
-                  <Clock size={24} />
-                  <span>Set Pending</span>
-                </button>
-                <button
-                  onClick={() => handleStatusChange('suspended')}
-                  disabled={loading || employee.status === 'suspended'}
-                  className="p-4 bg-orange-50 hover:bg-orange-100 border-2 border-orange-200 rounded-xl text-orange-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-2"
-                >
-                  <Ban size={24} />
-                  <span>Suspend</span>
-                </button>
-                <button
-                  onClick={() => handleStatusChange('terminated')}
-                  disabled={loading}
-                  className="p-4 bg-red-50 hover:bg-red-100 border-2 border-red-200 rounded-xl text-red-700 font-medium transition-colors disabled:opacity-50 flex flex-col items-center gap-2"
-                >
-                  <UserX size={24} />
-                  <span>Terminate</span>
-                </button>
-              </div>
-            </section>
-            
-            {/* Role Management */}
-            {isAdmin && (
+            {canChangeStatus && (
               <section>
-                <SectionHeader 
-                  icon={Lock} 
-                  title="Role Assignment" 
-                  subtitle="Change employee access level (Admin only)" 
+                <SectionHeader
+                  icon={Shield}
+                  title="Account Status Management"
+                  subtitle="Move this account through its lifecycle"
                 />
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {['staff', 'maintenance', 'hr', 'admin'].map(role => (
+                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                  {USER_STATUSES.map(status => {
+                    const action = STATUS_ACTIONS[status];
+                    const ActionIcon = action.icon;
+                    return (
+                      <button
+                        key={status}
+                        onClick={() => handleStatusChange(status)}
+                        disabled={loading || employee.status === status}
+                        className={`p-4 border-2 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-2 ${action.classes}`}
+                      >
+                        <ActionIcon size={24} />
+                        <span>{action.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* Role Management */}
+            {canChangeRole && roleOptions.length > 0 && (
+              <section>
+                <SectionHeader
+                  icon={Lock}
+                  title="Role Assignment"
+                  subtitle="Change employee access level"
+                />
+                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                  {roleOptions.map(role => (
                     <button
                       key={role}
                       onClick={() => handleRoleChange(role)}
                       disabled={loading || employee.role === role}
                       className={`p-4 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center gap-2 border-2
-                        ${employee.role === role 
-                          ? 'bg-indigo-100 border-indigo-300 text-indigo-700' 
+                        ${employee.role === role
+                          ? 'bg-indigo-100 border-indigo-300 text-indigo-700'
                           : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
                         }`}
                     >
                       <Shield size={24} />
-                      <span className="uppercase text-sm">{role}</span>
+                      <span className="uppercase text-sm">{ROLE_LABELS[role]}</span>
                     </button>
                   ))}
                 </div>
               </section>
             )}
-            
+
             {/* Danger Zone */}
-            {isAdmin && (
+            {canDelete && (
               <section>
-                <SectionHeader 
-                  icon={AlertTriangle} 
-                  title="Danger Zone" 
-                  subtitle="Irreversible actions - proceed with caution" 
+                <SectionHeader
+                  icon={AlertTriangle}
+                  title="Danger Zone"
+                  subtitle="Irreversible actions - proceed with caution"
                 />
                 <div className="bg-red-50 border-2 border-red-200 rounded-xl p-6">
                   <div className="flex items-start justify-between">

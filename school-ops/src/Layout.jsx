@@ -7,9 +7,11 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
-import { actorFrom, canSeeRoleView } from './permissions';
+import { actorFrom, can, canSeeRoleView } from './permissions';
+import { ROLES, ROLE_LABELS } from './constants';
+import { queryClient } from './data/queryClient';
 import { useUnreadCount } from './data/useNotifications';
-import { LogOut, Menu, X, Users, Bell, Crown } from 'lucide-react';
+import { LogOut, Menu, X, Users, Bell, Crown, Settings, ShieldCheck } from 'lucide-react';
 
 import logo from './assets/LogoT.png';
 
@@ -77,6 +79,21 @@ const navItems = [
   { to: '/admin',            label: 'Admin System',      view: 'admin'       },
 ];
 
+// Head Admin chip is indigo, every other role stays neutral slate.
+const ROLE_CHIP_STYLES = {
+  [ROLES.SUPER_ADMIN]: 'bg-indigo-700 text-white',
+};
+
+function RoleChip({ role }) {
+  if (!role) return null;
+  const style = ROLE_CHIP_STYLES[role] || 'bg-slate-200 text-slate-600';
+  return (
+    <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${style}`}>
+      {ROLE_LABELS[role] || role}
+    </span>
+  );
+}
+
 function NavItem({ to, label, mobile, onNavigate }) {
   // `end` ensures the index route only highlights at exactly "/", not for every
   // subpath.
@@ -117,8 +134,19 @@ export default function Layout({
 
   const closeMobile = () => setIsMobileMenuOpen(false);
 
+  // Shared computers: wipe every cached query (HR data, users, settings) so
+  // nothing survives a user switch after sign-out.
+  const handleSignOut = async () => {
+    await onSignOut();
+    queryClient.clear();
+  };
+
   const visibleNavItems = navItems.filter(item => canSeeRoleView(actor, item.view));
   const canSeeDirectory = canSeeRoleView(actor, 'maintenance');
+  const canReadSettings = can(actor, 'settings.read');
+  const canManageAdmins = can(actor, 'user.manageAdmins');
+  const showAdministration = canReadSettings || canManageAdmins;
+  const roleKey = actor?.role || userData?.role;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
@@ -170,6 +198,44 @@ export default function Layout({
                     <Users size={16} className="inline mr-2" />
                     Staff Directory
                   </NavLink>
+                </div>
+              )}
+
+              {showAdministration && (
+                <div className="mb-4">
+                  <p className="px-3 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                    Administration
+                  </p>
+                  {canReadSettings && (
+                    <NavLink
+                      to="/settings"
+                      className={({ isActive }) =>
+                        `text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full flex items-center ${
+                          isActive
+                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`
+                      }
+                    >
+                      <Settings size={16} className="inline mr-2" />
+                      School Settings
+                    </NavLink>
+                  )}
+                  {canManageAdmins && (
+                    <NavLink
+                      to="/admin-management"
+                      className={({ isActive }) =>
+                        `text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full flex items-center ${
+                          isActive
+                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`
+                      }
+                    >
+                      <ShieldCheck size={16} className="inline mr-2" />
+                      Admin Management
+                    </NavLink>
+                  )}
                 </div>
               )}
 
@@ -237,13 +303,11 @@ export default function Layout({
                 <p className="text-sm font-medium text-slate-900 truncate">
                   {userData?.displayName || userData?.email?.split('@')[0]}
                 </p>
-                <p className="text-xs text-slate-500 truncate capitalize">
-                  {userData?.role || 'staff'}
-                </p>
+                <RoleChip role={roleKey} />
               </div>
             </div>
             <button
-              onClick={onSignOut}
+              onClick={handleSignOut}
               className="flex items-center gap-2 text-slate-500 hover:text-red-600 text-sm font-medium transition-colors w-full"
             >
               <LogOut size={16} /> Sign Out
@@ -265,12 +329,15 @@ export default function Layout({
             )}
             <span className="font-bold text-slate-800">AFS Ops</span>
           </button>
-          <button
-            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg"
-          >
-            {isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
-          </button>
+          <div className="flex items-center gap-2">
+            {isRealUser && <RoleChip role={roleKey} />}
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg"
+            >
+              {isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+            </button>
+          </div>
         </div>
 
         {isMobileMenuOpen && (
@@ -302,6 +369,42 @@ export default function Layout({
                     >
                       <Users size={16} /> Staff Directory
                     </NavLink>
+                  </div>
+                )}
+
+                {showAdministration && (
+                  <div>
+                    <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Administration</p>
+                    {canReadSettings && (
+                      <NavLink
+                        to="/settings"
+                        onClick={closeMobile}
+                        className={({ isActive }) =>
+                          `p-3 rounded-lg text-sm font-medium text-left w-full flex items-center gap-2 ${
+                            isActive
+                              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                              : 'text-slate-600 hover:bg-slate-50'
+                          }`
+                        }
+                      >
+                        <Settings size={16} /> School Settings
+                      </NavLink>
+                    )}
+                    {canManageAdmins && (
+                      <NavLink
+                        to="/admin-management"
+                        onClick={closeMobile}
+                        className={({ isActive }) =>
+                          `p-3 rounded-lg text-sm font-medium text-left w-full flex items-center gap-2 ${
+                            isActive
+                              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                              : 'text-slate-600 hover:bg-slate-50'
+                          }`
+                        }
+                      >
+                        <ShieldCheck size={16} /> Admin Management
+                      </NavLink>
+                    )}
                   </div>
                 )}
 
@@ -341,7 +444,7 @@ export default function Layout({
                 </div>
 
                 <button
-                  onClick={() => { onSignOut(); closeMobile(); }}
+                  onClick={() => { handleSignOut(); closeMobile(); }}
                   className="flex items-center justify-center gap-2 p-3 bg-red-50 text-red-700 rounded-lg font-medium"
                 >
                   <LogOut size={18} /> Sign Out

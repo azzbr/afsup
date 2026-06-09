@@ -6,11 +6,23 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { Bell, AlertTriangle, Clock, Check, ChevronRight } from 'lucide-react';
+import { Bell, AlertTriangle, Clock, Check, ChevronRight, CalendarDays, CalendarCheck, Wrench } from 'lucide-react';
 
 import { db } from '../firebase';
 import { useNotifications } from '../data/useNotifications';
 import { useRouteContext } from './guards';
+
+// Per-type icon + label (see NotificationType in types.ts). Unknown types
+// fall back to the priority icon below.
+const typeMeta = {
+  compliance:      { icon: AlertTriangle, label: 'Compliance' },
+  leave_request:   { icon: CalendarDays,  label: 'Leave request' },
+  leave_decision:  { icon: CalendarCheck, label: 'Leave decision' },
+  ticket_sla:      { icon: Clock,         label: 'Ticket SLA' },
+  ticket_assigned: { icon: Wrench,        label: 'Ticket assigned' },
+  ticket_update:   { icon: Wrench,        label: 'Ticket update' },
+  system:          { icon: Bell,          label: 'System' },
+};
 
 const priorityStyles = {
   critical: { ring: 'border-red-200 bg-red-50', icon: 'text-red-600 bg-red-100', label: 'Critical' },
@@ -86,6 +98,8 @@ export default function NotificationsRoute() {
         <div className="space-y-3">
           {notifications.map((n) => {
             const style = priorityStyles[n.priority] || priorityStyles.info;
+            const meta = typeMeta[n.type];
+            const TypeIcon = meta?.icon;
             const isUnread = !n.readAt;
             return (
               <button
@@ -96,11 +110,14 @@ export default function NotificationsRoute() {
                   ${isUnread ? 'border-l-4 border-l-indigo-500' : 'opacity-70'}`}
               >
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${style.icon}`}>
-                  {n.priority === 'critical' ? <AlertTriangle size={20} /> : n.priority === 'warning' ? <Clock size={20} /> : <Bell size={20} />}
+                  {TypeIcon ? <TypeIcon size={20} /> : n.priority === 'critical' ? <AlertTriangle size={20} /> : n.priority === 'warning' ? <Clock size={20} /> : <Bell size={20} />}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="font-bold text-slate-900 truncate">{n.subject}</h3>
+                    {meta && (
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-indigo-500">{meta.label}</span>
+                    )}
                     <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{style.label}</span>
                   </div>
                   <p className="text-sm text-slate-600 whitespace-pre-line">{n.body}</p>

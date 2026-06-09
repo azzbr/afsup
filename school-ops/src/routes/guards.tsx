@@ -3,8 +3,8 @@
 
 import { Navigate, useOutletContext } from "react-router-dom";
 import type { ReactNode } from "react";
-import { canSeeRoleView } from "../permissions";
-import type { Actor } from "../permissions";
+import { can, canSeeRoleView } from "../permissions";
+import type { Action, Actor } from "../permissions";
 
 export interface RouteContext {
   user: { uid: string; isAnonymous: boolean; email?: string | null; displayName?: string | null } | null;
@@ -30,6 +30,23 @@ interface RequireCanProps {
 export function RequireCan({ view, children }: RequireCanProps) {
   const { actor } = useRouteContext();
   if (!canSeeRoleView(actor, view)) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
+interface RequireActionProps {
+  action: Action;
+  children: ReactNode;
+}
+
+/**
+ * Renders children only if `can(actor, action)` allows it. Otherwise redirects
+ * to `/`. Use for routes gated on a specific permission rather than a role view.
+ */
+export function RequireAction({ action, children }: RequireActionProps) {
+  const { actor } = useRouteContext();
+  if (!can(actor, action)) {
     return <Navigate to="/" replace />;
   }
   return <>{children}</>;

@@ -8,7 +8,7 @@ import { X, Mail, UserPlus, Loader2, Copy, CheckCircle, AlertTriangle, ChevronDo
 
 import { functions } from '../firebase';
 import {
-  ROLES, DEPARTMENTS, DEPARTMENT_LABELS, CONTRACT_TYPES, CONTRACT_TYPE_LABELS,
+  ROLE_LABELS, DEPARTMENTS, DEPARTMENT_LABELS, CONTRACT_TYPES, CONTRACT_TYPE_LABELS,
 } from '../constants';
 import { actorFrom, assignableRoles } from '../permissions';
 
@@ -235,13 +235,10 @@ export default function InviteEmployeeModal({ isOpen, onClose, userData }) {
                   value={role} onChange={e => setRole(e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
                 >
+                  {/* Option values stay raw role strings — they pass through
+                      unchanged to the inviteUser callable. */}
                   {roles.map(r => (
-                    <option key={r} value={r}>
-                      {r === ROLES.STAFF ? 'Staff / Teacher' :
-                       r === ROLES.MAINTENANCE ? 'Maintenance' :
-                       r === ROLES.HR ? 'HR' :
-                       r === ROLES.ADMIN ? 'Administrator' : r}
-                    </option>
+                    <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>
                   ))}
                 </select>
                 <p className="text-xs text-slate-400 mt-1">

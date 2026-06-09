@@ -20,8 +20,8 @@ service cloud.firestore {
     }
 
     // Head Admin / super_admin. Inherits every admin power (see CLAUDE.md §6
-    // and PHASES.md Phase 2.6). Until Phase 2.6 carves out super-admin-only
-    // capabilities, super_admin and admin are functionally equal here.
+    // and PHASES.md Phase 2.6) plus principal-only capabilities: writing to
+    // a super_admin's user doc and editing the admin tier's salary fields.
     function isSuperAdmin() {
       return isVerifiedUser() && getUserRole() == 'super_admin';
     }
@@ -30,8 +30,30 @@ service cloud.firestore {
       return isVerifiedUser() && (getUserRole() == 'admin' || getUserRole() == 'super_admin');
     }
 
+    function isHR() {
+      return isVerifiedUser() && getUserRole() == 'hr';
+    }
+
     function isMaintenance() {
       return isVerifiedUser() && (getUserRole() == 'maintenance' || getUserRole() == 'admin' || getUserRole() == 'super_admin');
+    }
+
+    // Fields a user may NEVER set on their own profile (CLAUDE.md section 5:
+    // salary, leave balances, sick days, joining date, employee number are
+    // HR/admin-only; viewAll is the legacy admin back-door flag).
+    function restrictedSelfFields() {
+      return ['basicSalary', 'housingAllowance', 'transportAllowance',
+              'phoneAllowance', 'annualLeaveBalance', 'sickDaysUsed',
+              'leaveBalances', 'dateOfJoining', 'employeeNumber', 'viewAll'];
+    }
+
+    // Salary/leave fields that only a super_admin may edit when the target
+    // doc belongs to an admin (matrix: "Edit salary of admin or super_admin"
+    // is super_admin-only).
+    function salaryTierFields() {
+      return ['basicSalary', 'housingAllowance', 'transportAllowance',
+              'phoneAllowance', 'annualLeaveBalance', 'sickDaysUsed',
+              'leaveBalances'];
     }
 
     // --- Collection Rules ---
@@ -40,14 +62,18 @@ service cloud.firestore {
     match /users/{userId} {
       // READ:
       //   - own profile
-      //   - admin sees everyone
+      //   - super_admin sees everyone
+      //   - plain admin sees everyone EXCEPT super_admins (matrix: "View
+      //     super_admin profiles" is super_admin-only; list queries must be
+      //     role-scoped — see useUsers)
       //   - HR sees non-admins
       //   - maintenance sees staff + maintenance
       //   - staff sees other staff
       allow read: if isAuthenticated() && (
         request.auth.uid == userId ||
-        isAdmin() ||
-        (getUserRole() == 'hr' && resource.data.role != 'admin' && resource.data.role != 'super_admin') ||
+        isSuperAdmin() ||
+        (isAdmin() && resource.data.role != 'super_admin') ||
+        (isHR() && resource.data.role != 'admin' && resource.data.role != 'super_admin') ||
         (getUserRole() == 'maintenance' && ['staff', 'maintenance'].hasAny([resource.data.role])) ||
         (getUserRole() == 'staff' && resource.data.role == 'staff')
       );
@@ -69,6 +95,9 @@ service cloud.firestore {
       //   - role and status can NEVER be changed via direct client write.
       //     Both go through the updateUserRole / updateUserStatus Cloud
       //     Functions, which write audit_log atomically.
+      //   - A super_admin's doc may only be written by a super_admin or by
+      //     the Head Admin themselves (plain admin hands off).
+      //   - Salary/leave fields on an admin's doc are super_admin-only.
       //   - Subject to that, admin/super_admin can edit anyone, HR can edit
       //     non-admins (salary, leave balance, etc.), and any user can edit
       //     their own non-restricted profile fields.
@@ -77,9 +106,30 @@ service cloud.firestore {
         request.resource.data.role == resource.data.role
         && request.resource.data.status == resource.data.status
       ) && (
+        // Plain admin cannot touch a super_admin target doc at all.
+        resource.data.role != 'super_admin'
+        || isSuperAdmin()
+        || request.auth.uid == userId
+      ) && (
+        // Salary-tier fields on an admin doc require super_admin.
+        resource.data.role != 'admin'
+        || isSuperAdmin()
+        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(salaryTierFields())
+      ) && (
+        // NEVER-self guard (CLAUDE.md section 5): salary/leave-balance fields
+        // are HR/admin-only and never self-editable. Applies to EVERY branch
+        // below — without it an HR (or super_admin) actor passes their role
+        // branch and the own-profile restrictedSelfFields() check is skipped.
+        request.auth.uid != userId
+        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(salaryTierFields())
+      ) && (
         isAdmin()
-        || (getUserRole() == 'hr' && resource.data.role != 'admin' && resource.data.role != 'super_admin')
-        || (isAuthenticated() && request.auth.uid == userId)
+        || (isHR() && resource.data.role != 'admin' && resource.data.role != 'super_admin')
+        || (
+          // Own-profile branch: never the HR/admin-only fields.
+          isAuthenticated() && request.auth.uid == userId
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(restrictedSelfFields())
+        )
       );
 
       // DELETE — disallowed from the client.
@@ -116,16 +166,22 @@ service cloud.firestore {
 
     // 4. Leave Requests Collection
     match /leave_requests/{requestId} {
-      // READ: Author can see own requests, Admins see all
-      allow read: if isAdmin() ||
+      // READ: Author can see own requests, HR and admins see all
+      allow read: if isAdmin() || isHR() ||
                   (isAuthenticated() && resource.data.userId == request.auth.uid);
 
-      // CREATE: Authenticated users can create leave requests for themselves
+      // CREATE: Authenticated users can create leave requests for themselves,
+      // and every request starts pending.
       allow create: if isAuthenticated() &&
-                    request.auth.uid == request.resource.data.userId;
+                    request.auth.uid == request.resource.data.userId &&
+                    request.resource.data.status == 'pending';
 
-      // UPDATE: Admins can update status. Authors CANNOT update requests once submitted.
-      allow update: if isAdmin();
+      // UPDATE: HR/admin may edit non-status fields only. Approve/reject
+      // decisions go through the decideLeaveRequest Cloud Function (admin
+      // SDK bypasses these rules), which debits balances atomically and
+      // blocks deciding your own request.
+      allow update: if (isAdmin() || isHR()) &&
+                    request.resource.data.status == resource.data.status;
 
       // DELETE: Admins only
       allow delete: if isAdmin();
@@ -171,6 +227,16 @@ service cloud.firestore {
                     resource.data.targetUid == request.auth.uid &&
                     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
       allow create, delete: if false; // Cloud Functions only.
+    }
+
+    // 8. School Settings (Phase 2.6 — singleton doc, id 'current')
+    //
+    // HR/admin dashboards read the current values; ONLY the
+    // updateSchoolSettings Cloud Function (gated to super_admin) writes,
+    // so every change is whitelist-validated and audit-logged.
+    match /school_settings/{settingsId} {
+      allow read: if isAdmin() || isHR();
+      allow write: if false; // Cloud Functions only.
     }
   }
 }

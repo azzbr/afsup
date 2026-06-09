@@ -6,10 +6,10 @@
 // CSV format: standard RFC 4180 (quote fields containing commas/quotes,
 // double-quote escapes within quoted fields, CRLF line endings).
 //
-// IMPORTANT: real WPS/GOSI submission formats are tuned per-bank and per-year
-// at the Bahrain Central Bank's discretion. The CSVs here are pragmatic
-// approximations — HR should review against the latest LMRA/GOSI templates
-// before submitting. Refining to bank-exact formats is a separate task.
+// IMPORTANT: the official WPS (LMRA EMS portal) and GOSI submission formats
+// are revised periodically. The CSVs here are pragmatic approximations — HR
+// should review against the latest LMRA/GOSI templates before submitting.
+// Refining to portal-exact formats is a separate task.
 
 import type { User } from "../types";
 import { computeEOSG, totalLiability } from "./eosg";
@@ -27,7 +27,7 @@ function csvCell(value: unknown): string {
   return s;
 }
 
-function toCSV(rows: (string | number | null | undefined)[][]): string {
+export function toCSV(rows: (string | number | null | undefined)[][]): string {
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
 
@@ -55,7 +55,7 @@ export interface GeneratedReport {
   mime: string;
 }
 
-function csvReport(name: string, content: string): GeneratedReport {
+export function csvReport(name: string, content: string): GeneratedReport {
   const stamp = new Date().toISOString().split("T")[0];
   return {
     filename: `${name}_${stamp}.csv`,
@@ -67,13 +67,31 @@ function csvReport(name: string, content: string): GeneratedReport {
 // ============================================================================
 // 1. GOSI Monthly Submission
 //
-// Lists all Bahraini employees with the salary components GOSI uses for
-// contribution math (employee 5% + employer 12% of basic).
+// Bahrain GOSI 2026 rates: Bahraini employees pay 8% of basic and the
+// employer 17%; expat employees pay 1% and the employer 3%. ALL active
+// employees are included — expats are insured too, not exempt. Rates are
+// injectable from school_settings (gosi.*) so a statutory change does not
+// require a code change.
 // ============================================================================
 
-export function gosiSubmissionReport(users: User[]): GeneratedReport {
-  const bahrainis = users
-    .filter((u) => u.nationality === "Bahraini" && u.status !== "blocked" && u.status !== "suspended")
+export interface GosiRatePair {
+  employerRate: number;
+  employeeRate: number;
+}
+
+export interface GosiRates {
+  bahraini: GosiRatePair;
+  expat: GosiRatePair;
+}
+
+export const DEFAULT_GOSI_RATES: GosiRates = {
+  bahraini: { employerRate: 0.17, employeeRate: 0.08 },
+  expat: { employerRate: 0.03, employeeRate: 0.01 },
+};
+
+export function gosiSubmissionReport(users: User[], gosiRates: GosiRates = DEFAULT_GOSI_RATES): GeneratedReport {
+  const insured = users
+    .filter((u) => u.status !== "blocked" && u.status !== "suspended")
     .filter((u) => num(u.basicSalary) > 0);
 
   const rows: (string | number)[][] = [
@@ -81,9 +99,10 @@ export function gosiSubmissionReport(users: User[]): GeneratedReport {
       "CPR Number",
       "Full Name (Arabic)",
       "Full Name (English)",
+      "Nationality Class",
       "Basic Salary (BHD)",
-      "Employee 5%",
-      "Employer 12%",
+      "Employee Contribution",
+      "Employer Contribution",
       "Total Contribution",
       "Date of Joining",
       "Position",
@@ -91,33 +110,46 @@ export function gosiSubmissionReport(users: User[]): GeneratedReport {
     ],
   ];
 
-  for (const u of bahrainis) {
+  let totalBasic = 0;
+  let totalEmployee = 0;
+  let totalEmployer = 0;
+
+  for (const u of insured) {
     const basic = num(u.basicSalary);
+    const isBahraini = u.nationality === "Bahraini";
+    const rates = isBahraini ? gosiRates.bahraini : gosiRates.expat;
+    const employee = basic * rates.employeeRate;
+    const employer = basic * rates.employerRate;
+    totalBasic += basic;
+    totalEmployee += employee;
+    totalEmployer += employer;
+
     rows.push([
       u.cprNumber || "",
       u.arabicName || "",
       u.displayName || `${u.firstName || ""} ${u.lastName || ""}`.trim(),
+      isBahraini ? "Bahraini" : "Expat",
       fmtMoney(basic),
-      fmtMoney(basic * 0.05),
-      fmtMoney(basic * 0.12),
-      fmtMoney(basic * 0.17),
+      fmtMoney(employee),
+      fmtMoney(employer),
+      fmtMoney(employee + employer),
       fmtDate(u.dateOfJoining),
       u.position || "",
       u.department || "",
     ]);
   }
 
-  // Totals row
-  const totalBasic = bahrainis.reduce((s, u) => s + num(u.basicSalary), 0);
+  // Totals row — sums of the per-row contributions (rates differ per row)
   rows.push([]);
   rows.push([
     "",
     "",
     "TOTAL",
+    "",
     fmtMoney(totalBasic),
-    fmtMoney(totalBasic * 0.05),
-    fmtMoney(totalBasic * 0.12),
-    fmtMoney(totalBasic * 0.17),
+    fmtMoney(totalEmployee),
+    fmtMoney(totalEmployer),
+    fmtMoney(totalEmployee + totalEmployer),
     "",
     "",
     "",
@@ -127,14 +159,15 @@ export function gosiSubmissionReport(users: User[]): GeneratedReport {
 }
 
 // ============================================================================
-// 2. WPS Salary Information File (SIF) — pragmatic CSV approximation
+// 2. WPS LMRA CSV (approximation)
 //
-// Bahraini banks typically accept a SIF for monthly salary upload. The
-// canonical format is bank-specific. This CSV provides the universally
-// required fields so HR can map to whatever template their bank uses.
+// Bahrain WPS 2.0 salary files are uploaded through the LMRA EMS portal —
+// NOT the UAE SIF format this report was previously framed as. LMRA revises
+// the official column set periodically; this CSV carries the universally
+// required fields so HR can map them onto the current LMRA template.
 // ============================================================================
 
-export function wpsSifReport(users: User[]): GeneratedReport {
+export function wpsLmraReport(users: User[]): GeneratedReport {
   const payable = users.filter(
     (u) =>
       u.status === "approved" &&
@@ -190,7 +223,7 @@ export function wpsSifReport(users: User[]): GeneratedReport {
   rows.push([]);
   rows.push(["", "", "TOTAL PAYROLL", "", "", "", "", "", "", "", fmtMoney(totalPayroll), "BHD"]);
 
-  return csvReport("wps_sif", toCSV(rows));
+  return csvReport("wps_lmra", toCSV(rows));
 }
 
 // ============================================================================

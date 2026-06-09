@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
-import { auditUpdate } from '../data/audit';
+import { httpsCallable } from 'firebase/functions';
+import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { functions } from '../firebase';
 import { actorFrom, can } from '../permissions';
-import { useUsers } from '../data/useUsers';
-import { useLeaveRequests } from '../data/useLeaveRequests';
-import { resolveBalances, debitLeave } from '../hr/leave';
+import { useUsers, USERS_KEY } from '../data/useUsers';
+import { useLeaveRequests, LEAVE_REQUESTS_KEY } from '../data/useLeaveRequests';
+import { complianceAlertsAll } from '../hr/compliance';
 import HRDirectory from './HRDirectory';
 import EmployeeDetailView from './EmployeeDetailView';
 import InviteEmployeeModal from './InviteEmployeeModal';
@@ -61,8 +62,8 @@ const StatCard = ({ icon: Icon, label, value, trend, color = 'indigo', onClick }
 const ComplianceAlertBanner = ({ alerts, onViewAll }) => {
   if (alerts.length === 0) return null;
   
-  const criticalCount = alerts.filter(a => a.priority === 'critical').length;
-  const warningCount = alerts.filter(a => a.priority === 'warning').length;
+  const criticalCount = alerts.filter(a => a.severity === 'critical').length;
+  const warningCount = alerts.filter(a => a.severity === 'warning').length;
   
   return (
     <div className="bg-gradient-to-r from-red-50 via-amber-50 to-red-50 border border-red-200 rounded-2xl p-5 mb-6">
@@ -84,12 +85,12 @@ const ComplianceAlertBanner = ({ alerts, onViewAll }) => {
                 <span
                   key={i}
                   className={`text-xs px-2 py-1 rounded-full ${
-                    alert.priority === 'critical' 
-                      ? 'bg-red-100 text-red-700' 
+                    alert.severity === 'critical'
+                      ? 'bg-red-100 text-red-700'
                       : 'bg-amber-100 text-amber-700'
                   }`}
                 >
-                  {alert.msg}
+                  {alert.message}
                 </span>
               ))}
               {alerts.length > 3 && (
@@ -116,7 +117,7 @@ const ComplianceAlertBanner = ({ alerts, onViewAll }) => {
 // PENDING APPROVALS WIDGET
 // ============================================================================
 
-const PendingApprovalsWidget = ({ users, onApprove, onViewUser }) => {
+const PendingApprovalsWidget = ({ users, onApprove, onViewUser, canApprove }) => {
   const pendingUsers = users.filter(u => u.status === 'pending');
   
   if (pendingUsers.length === 0) {
@@ -180,12 +181,14 @@ const PendingApprovalsWidget = ({ users, onApprove, onViewUser }) => {
                 >
                   View
                 </button>
-                <button
-                  onClick={() => onApprove(user.id)}
-                  className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors"
-                >
-                  Approve
-                </button>
+                {canApprove(user) && (
+                  <button
+                    onClick={() => onApprove(user)}
+                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors"
+                  >
+                    Approve
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -245,7 +248,7 @@ const LeaveRequestsWidget = ({ requests, onApprove, onReject }) => {
               <div>
                 <p className="font-semibold text-slate-800">{request.employeeName}</p>
                 <p className="text-sm text-blue-700">
-                  {request.daysRequested} days • {request.leaveStart?.toDate?.()?.toLocaleDateString()} - {request.leaveEnd?.toDate?.()?.toLocaleDateString()}
+                  {request.daysRequested} days • {request.leaveStart?.toLocaleDateString()} - {request.leaveEnd?.toLocaleDateString()}
                 </p>
               </div>
               <span className="px-2 py-0.5 bg-blue-200 text-blue-800 rounded text-xs font-bold">
@@ -436,89 +439,6 @@ const BirthdaysAnniversariesWidget = ({ employees }) => {
 };
 
 // ============================================================================
-// COMPLIANCE ALERTS (pure — module-scope)
-//
-// Accepts a user list where expiry fields have already been normalized to
-// JS Dates by the data hook (useUsers convertUser).
-//
-// Phase 2.5 added: MOE approval expiry, contract end date, probation end date.
-// Phase 4 will move this whole function to a scheduled Cloud Function that
-// writes notifications/ docs instead of recomputing on every dashboard load.
-// ============================================================================
-
-function calculateComplianceAlerts(users) {
-  const alerts = [];
-  const now = new Date();
-  const sixtyDays = new Date(); sixtyDays.setDate(now.getDate() + 60);
-  const ninetyDays = new Date(); ninetyDays.setDate(now.getDate() + 90);
-  const thirtyDays = new Date(); thirtyDays.setDate(now.getDate() + 30);
-
-  users.forEach(u => {
-    const name = u.displayName || u.email;
-
-    // -------- CPR (always required for Bahrain residents)
-    if (u.cprExpiry instanceof Date) {
-      if (u.cprExpiry < now) {
-        alerts.push({ priority: 'critical', msg: `CPR Expired: ${name}`, employee: u });
-      } else if (u.cprExpiry < ninetyDays) {
-        alerts.push({ priority: 'warning', msg: `CPR Expiring: ${name}`, employee: u });
-      }
-    }
-
-    // -------- Residence Permit (non-Bahrainis only, LMRA-critical)
-    if (u.nationality !== 'Bahraini' && u.residencePermitExpiry instanceof Date) {
-      if (u.residencePermitExpiry < now) {
-        alerts.push({ priority: 'critical', msg: `Visa Expired: ${name}`, employee: u });
-      } else if (u.residencePermitExpiry < thirtyDays) {
-        alerts.push({ priority: 'warning', msg: `Visa Expiring: ${name}`, employee: u });
-      }
-    }
-
-    // -------- MOE Approval (teachers only)
-    if (u.isTeacher) {
-      if (u.moeApprovalStatus === 'expired' || u.moeApprovalStatus === 'rejected') {
-        alerts.push({ priority: 'critical', msg: `MOE Approval ${u.moeApprovalStatus}: ${name}`, employee: u });
-      } else if (u.moeApprovalExpiry instanceof Date) {
-        if (u.moeApprovalExpiry < now) {
-          alerts.push({ priority: 'critical', msg: `MOE Approval Expired: ${name}`, employee: u });
-        } else if (u.moeApprovalExpiry < ninetyDays) {
-          alerts.push({ priority: 'warning', msg: `MOE Approval Expiring: ${name}`, employee: u });
-        }
-      } else if (u.moeApprovalStatus === 'pending') {
-        alerts.push({ priority: 'warning', msg: `MOE Approval pending: ${name}`, employee: u });
-      }
-    }
-
-    // -------- Contract end date (fixed-term only)
-    if (u.contractEndDate instanceof Date && u.contractType === 'fixed_term') {
-      if (u.contractEndDate < now) {
-        alerts.push({ priority: 'critical', msg: `Contract Expired: ${name}`, employee: u });
-      } else if (u.contractEndDate < sixtyDays) {
-        alerts.push({ priority: 'warning', msg: `Contract Renewal Due: ${name}`, employee: u });
-      }
-    }
-
-    // -------- Probation end (HR needs to confirm or extend)
-    if (u.probationEndDate instanceof Date) {
-      if (u.probationEndDate < now) {
-        // Past probation but still flagged — HR hasn't confirmed yet
-        alerts.push({ priority: 'info', msg: `Confirm Probation: ${name}`, employee: u });
-      } else if (u.probationEndDate < thirtyDays) {
-        alerts.push({ priority: 'warning', msg: `Probation Ending Soon: ${name}`, employee: u });
-      }
-    }
-
-    // -------- Bank IBAN format (WPS compliance)
-    if (!u.iban || !u.iban.startsWith('BH')) {
-      alerts.push({ priority: 'info', msg: `Missing/Invalid IBAN: ${name}`, employee: u });
-    }
-  });
-
-  const order = { critical: 3, warning: 2, info: 1 };
-  return alerts.sort((a, b) => order[b.priority] - order[a.priority]);
-}
-
-// ============================================================================
 // MAIN HR SYSTEM COMPONENT
 // ============================================================================
 
@@ -528,9 +448,11 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
   const [showInviteModal, setShowInviteModal] = useState(false);
 
   const actor = actorFrom(userData);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // Live data from Firestore — subscriptions auto-update after mutations.
-  const { data: allUsers = [], isLoading: usersLoading } = useUsers(Boolean(userData));
+  const { data: allUsers = [], isLoading: usersLoading } = useUsers(actor, Boolean(userData));
   const { data: pendingLeaveRaw = [], isLoading: leaveLoading } =
     useLeaveRequests(actor, 'pending');
 
@@ -556,8 +478,10 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
     });
   }, [pendingLeaveRaw]);
 
+  // Shared compliance module (src/hr/compliance.ts) — same thresholds as the
+  // Cloud Function scan, sorted critical-first.
   const complianceAlerts = useMemo(
-    () => calculateComplianceAlerts(employees),
+    () => complianceAlertsAll(employees),
     [employees]
   );
 
@@ -581,7 +505,7 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
     pending: employees.filter(e => e.status === 'pending').length,
     bahraini: employees.filter(e => e.nationality === 'Bahraini').length,
     expat: employees.filter(e => e.nationality !== 'Bahraini').length,
-    alerts: complianceAlerts.filter(a => a.priority === 'critical').length
+    alerts: complianceAlerts.filter(a => a.severity === 'critical').length
   };
   
   // Handlers
@@ -595,87 +519,54 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
     setActiveView('directory');
   };
 
-  // The refresh button is now a no-op visually (data is live), but we keep
-  // the callback so the existing UI button doesn't break. Could remove the
-  // button in a future polish pass.
-  const handleRefresh = () => {};
+  // refetchType 'none': the onSnapshot subscriptions push fresh data; a real
+  // refetch would run the stub queryFn and clobber the cache with [].
+  const invalidateHRData = () => {
+    queryClient.invalidateQueries({ queryKey: USERS_KEY, refetchType: 'none' });
+    queryClient.invalidateQueries({ queryKey: LEAVE_REQUESTS_KEY, refetchType: 'none' });
+  };
 
-  // Mutations: writes only. The Firestore subscription pushes fresh data
-  // automatically, so no manual refetch is needed.
-  const handleQuickApprove = async (userId) => {
-    if (!user?.uid) return;
+  const handleRefresh = invalidateHRData;
+
+  // User approval goes through the updateUserStatus Cloud Function so the
+  // permission check, audit_log entry, and status write happen server-side.
+  const handleQuickApprove = async (pendingUser) => {
+    const targetId = pendingUser.uid || pendingUser.id;
+    if (!can(actor, 'user.edit.status', {
+      type: 'user',
+      data: { uid: targetId, role: pendingUser.role || 'staff' },
+    })) return;
     try {
-      await updateDoc(doc(db, 'users', userId), {
-        status: 'approved',
-        approvedAt: serverTimestamp(),
-        isActive: true,
-        ...auditUpdate(user.uid),
-      });
+      const call = httpsCallable(functions, 'updateUserStatus');
+      await call({ uid: targetId, status: 'approved' });
+      queryClient.invalidateQueries({ queryKey: USERS_KEY, refetchType: 'none' });
     } catch (err) {
       console.error('Approve failed:', err);
       alert('Failed to approve user: ' + err.message);
     }
   };
 
-  // Approve a leave request: mark approved AND decrement the user's balance.
-  // Mirrors AdminView.processLeaveRequest so behaviour is consistent.
-  const handleApproveLeave = async (request) => {
+  // Leave decisions go through the decideLeaveRequest Cloud Function: it
+  // updates the request, debits the balance transactionally (no double-debit
+  // on double-approve), writes audit_log, and notifies the employee.
+  const decideLeave = async (request, decision, reason) => {
     if (!user?.uid) return;
     try {
-      await updateDoc(doc(db, 'leave_requests', request.id), {
-        status: 'approved',
-        processedAt: serverTimestamp(),
-        processedBy: user.uid,
-        ...auditUpdate(user.uid),
-      });
-
-      // Phase 2.7: debit the per-type balance. Falls back to annual for
-      // legacy requests without a leaveType field.
-      const userRef = doc(db, 'users', request.userId);
-      const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
-        const userDoc = userSnap.data();
-        const leaveType = request.leaveType || 'annual';
-        const days = request.daysRequested || 0;
-
-        // unpaid/study don't decrement (no fixed entitlement)
-        if (leaveType !== 'unpaid' && leaveType !== 'study') {
-          const currentBalances = resolveBalances(userDoc);
-          const newBalances = debitLeave(currentBalances, leaveType, days);
-
-          // Keep legacy fields in sync so older consumers don't drift.
-          const updates = {
-            leaveBalances: newBalances,
-            ...auditUpdate(user.uid),
-          };
-          if (leaveType === 'annual') {
-            updates.annualLeaveBalance = Math.max(0, newBalances.annual.entitled - newBalances.annual.used);
-          } else if (leaveType === 'sick') {
-            updates.sickDaysUsed = newBalances.sick.used;
-          }
-
-          await updateDoc(userRef, updates);
-        }
-      }
+      const call = httpsCallable(functions, 'decideLeaveRequest');
+      await call({ requestId: request.id, decision, ...(reason ? { reason } : {}) });
+      invalidateHRData();
     } catch (err) {
-      console.error('Leave approve failed:', err);
-      alert('Failed to approve leave: ' + err.message);
+      console.error(`Leave ${decision} failed:`, err);
+      alert(`Failed to ${decision === 'approved' ? 'approve' : 'reject'} leave: ` + err.message);
     }
   };
 
-  const handleRejectLeave = async (request) => {
-    if (!user?.uid) return;
-    try {
-      await updateDoc(doc(db, 'leave_requests', request.id), {
-        status: 'rejected',
-        processedAt: serverTimestamp(),
-        processedBy: user.uid,
-        ...auditUpdate(user.uid),
-      });
-    } catch (err) {
-      console.error('Leave reject failed:', err);
-      alert('Failed to reject leave: ' + err.message);
-    }
+  const handleApproveLeave = (request) => decideLeave(request, 'approved');
+
+  const handleRejectLeave = (request) => {
+    const reason = window.prompt(`Reason for rejecting ${request.employeeName ? `${request.employeeName}'s` : 'this'} leave request:`);
+    if (reason === null) return; // cancelled the prompt
+    return decideLeave(request, 'rejected', reason.trim() || undefined);
   };
   
   // Loading state
@@ -812,6 +703,10 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
                 users={employees}
                 onApprove={handleQuickApprove}
                 onViewUser={handleEmployeeSelect}
+                canApprove={(u) => can(actor, 'user.edit.status', {
+                  type: 'user',
+                  data: { uid: u.uid || u.id, role: u.role || 'staff' },
+                })}
               />
               
               <LeaveRequestsWidget
@@ -841,20 +736,28 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
                     </div>
                     <ChevronRight size={16} className="text-slate-300" />
                   </button>
-                  <button className="w-full flex items-center justify-between p-3 bg-slate-50 hover:bg-indigo-50 rounded-xl text-left transition-colors group">
+                  <button
+                    onClick={() => setActiveView('reports')}
+                    className="w-full flex items-center justify-between p-3 bg-slate-50 hover:bg-indigo-50 rounded-xl text-left transition-colors group"
+                  >
                     <div className="flex items-center gap-3">
                       <FileText size={18} className="text-slate-400 group-hover:text-indigo-600" />
-                      <span className="font-medium text-slate-700">Export HR Report</span>
+                      <span className="font-medium text-slate-700">Reports & Exports</span>
                     </div>
                     <ChevronRight size={16} className="text-slate-300" />
                   </button>
-                  <button className="w-full flex items-center justify-between p-3 bg-slate-50 hover:bg-indigo-50 rounded-xl text-left transition-colors group">
-                    <div className="flex items-center gap-3">
-                      <Settings size={18} className="text-slate-400 group-hover:text-indigo-600" />
-                      <span className="font-medium text-slate-700">HR Settings</span>
-                    </div>
-                    <ChevronRight size={16} className="text-slate-300" />
-                  </button>
+                  {can(actor, 'settings.read') && (
+                    <button
+                      onClick={() => navigate('/settings')}
+                      className="w-full flex items-center justify-between p-3 bg-slate-50 hover:bg-indigo-50 rounded-xl text-left transition-colors group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Settings size={18} className="text-slate-400 group-hover:text-indigo-600" />
+                        <span className="font-medium text-slate-700">School Settings</span>
+                      </div>
+                      <ChevronRight size={16} className="text-slate-300" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

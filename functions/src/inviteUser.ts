@@ -25,6 +25,7 @@ import { db, adminAuth } from "./admin";
 import { canInvite, canAssignRole, type Role, type ActorDoc } from "./permissions";
 import { writeAudit } from "./audit";
 import { sendInviteEmail, RESEND_API_KEY } from "./email";
+import { appBaseUrl } from "./config";
 
 type Department = "academic" | "administration" | "operations" | "support" | "it" | "maintenance" | "health";
 type ContractType = "permanent" | "fixed_term" | "part_time" | "consultant";
@@ -43,8 +44,7 @@ interface InviteUserRequest {
   isTeacher?: boolean;
   employeeNumber?: string;
   // Optional override for the public app URL when building the invite link.
-  // Defaults to a hardcoded production URL. Set via Functions env if hosting
-  // changes.
+  // Defaults to the APP_BASE_URL functions param (see ./config).
   appBaseUrl?: string;
 }
 
@@ -56,15 +56,22 @@ interface InviteUserResponse {
   token: string;
 }
 
-const DEFAULT_APP_BASE_URL = "https://afsup-3ff9b.web.app";
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+// All five roles are valid invite targets; canAssignRole() decides per-caller
+// (admin invites up to admin, only super_admin invites super_admin).
 function isValidRole(role: unknown): role is Role {
-  return role === "staff" || role === "maintenance" || role === "hr" || role === "admin";
+  return (
+    role === "staff" ||
+    role === "maintenance" ||
+    role === "hr" ||
+    role === "admin" ||
+    role === "super_admin"
+  );
 }
 
 export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>(
@@ -209,7 +216,7 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
     });
 
     // ------------------------------------------------------ build URL + email
-    const baseUrl = data.appBaseUrl?.trim() || DEFAULT_APP_BASE_URL;
+    const baseUrl = data.appBaseUrl?.trim() || appBaseUrl();
     const inviteUrl =
       `${baseUrl.replace(/\/+$/, "")}/accept-invite?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
 

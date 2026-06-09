@@ -1,17 +1,19 @@
 import React, { useState, useMemo } from 'react';
-import { updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { updateDoc, doc, serverTimestamp, arrayUnion, Timestamp } from 'firebase/firestore';
 import { db } from './firebase';
 import {
   Wrench, X, CheckCircle, MapPin, Clock, User, Camera, Calendar, RefreshCw,
   AlertTriangle, Search, ChevronDown, ChevronUp, Play, Zap, History,
-  AlertCircle, Copy, Building2, List, RotateCcw
+  AlertCircle, Copy, Building2, List, RotateCcw, Ban, MessageSquare
 } from 'lucide-react';
 import { compressImage, uploadImage } from './storage';
 import { auditUpdate } from './data/audit';
+import { can, actorFrom } from './permissions';
 import { useScheduledTasks } from './data/useScheduledTasks';
+import SupervisorDashboard from './maintenance/SupervisorDashboard';
 import {
   getTimeOpen, buildingOf, BUILDING_LABELS, groupDuplicateTickets,
-  computeScheduleDue, ticketSorters
+  computeScheduleDue, ticketSorters, isActiveTicket
 } from './maintenance/ticketUtils';
 
 const BUILDING_ORDER = ['B3', 'B4', 'B5', 'Admin', 'Other'];
@@ -31,7 +33,8 @@ const StatusBadge = ({ status }) => {
     open: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', icon: AlertCircle, label: 'Open' },
     in_progress: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', icon: Clock, label: 'In Progress' },
     resolved: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', icon: CheckCircle, label: 'Resolved' },
-    duplicate: { bg: 'bg-slate-100', text: 'text-slate-500', border: 'border-slate-200', icon: Copy, label: 'Duplicate' }
+    duplicate: { bg: 'bg-slate-100', text: 'text-slate-500', border: 'border-slate-200', icon: Copy, label: 'Duplicate' },
+    cancelled: { bg: 'bg-slate-100', text: 'text-slate-500', border: 'border-slate-200', icon: Ban, label: 'Cancelled' }
   };
   const style = config[status] || config.open;
   const Icon = style.icon;
@@ -98,6 +101,16 @@ const StatCard = ({ icon: Icon, label, count, colorClass, borderColor, onClick }
 const fmtDateTime = (d) => (d instanceof Date ? d.toLocaleString() : 'N/A');
 const fmtDate = (d) => (d instanceof Date ? d.toLocaleDateString() : 'N/A');
 
+// The data hook converts top-level Timestamps to Dates, but NOT Timestamps
+// nested inside arrays — so a notesThread entry's `at` may still be a raw
+// Firestore Timestamp. This helper is the single allowed exception to the
+// no-toDate rule; keep all such conversion inside it.
+const noteDate = (value) => {
+  if (value instanceof Date) return value;
+  if (value && typeof value.toDate === 'function') return value.toDate();
+  return null;
+};
+
 const descriptionPreview = (text) => {
   if (!text) return '';
   return text.length > 90 ? text.slice(0, 90).trimEnd() + '...' : text;
@@ -105,9 +118,39 @@ const descriptionPreview = (text) => {
 
 // --- Modals ---
 
-function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName }) {
+function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName, actor, onCancelTicket, onAddNote }) {
   const [selectedImage, setSelectedImage] = useState(null);
+  const [noteText, setNoteText] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
   if (!isOpen || !ticket) return null;
+
+  const canAddNote = can(actor, 'ticket.update.status');
+  const canCancel = can(actor, 'ticket.cancel') && isActiveTicket(ticket);
+
+  // Legacy adminNotes renders first; threaded notes follow, oldest first.
+  const noteEntries = [
+    ...(ticket.adminNotes
+      ? [{ byName: ticket.lastNoteBy || 'Admin', text: ticket.adminNotes, at: noteDate(ticket.lastNoteAt), legacy: true }]
+      : []),
+    ...(ticket.notesThread ?? [])
+      .map(n => ({ ...n, at: noteDate(n.at) }))
+      .sort((a, b) => (a.at ? a.at.getTime() : 0) - (b.at ? b.at.getTime() : 0)),
+  ];
+
+  const handleAddNote = async () => {
+    const text = noteText.trim();
+    if (!text) return;
+    setSavingNote(true);
+    try {
+      await onAddNote(ticket, text);
+      setNoteText('');
+    } catch (e) {
+      console.error(e);
+      alert('Error adding note');
+    } finally {
+      setSavingNote(false);
+    }
+  };
 
   const reporter = ticket.reporterName || (ticket.submittedBy ? getDisplayName(ticket.submittedBy) : 'Anonymous');
   const timeline = [
@@ -234,10 +277,76 @@ function TicketDetailModal({ isOpen, onClose, ticket, getDisplayName }) {
                <p className="text-slate-700 text-sm whitespace-pre-wrap">{ticket.completionNotes}</p>
              </div>
            )}
+
+           {ticket.status === 'cancelled' && (
+             <div className="bg-slate-100 p-3 rounded-lg border border-slate-200">
+               <p className="text-xs text-slate-500 uppercase font-semibold mb-1 flex items-center gap-1">
+                 <Ban size={12} /> Cancelled{ticket.cancelledByName ? ` by ${ticket.cancelledByName}` : ''}
+               </p>
+               {ticket.cancelReason && (
+                 <p className="text-slate-600 text-sm whitespace-pre-wrap">{ticket.cancelReason}</p>
+               )}
+             </div>
+           )}
+
+           {(noteEntries.length > 0 || canAddNote) && (
+             <div>
+               <p className="text-xs text-slate-400 uppercase font-semibold mb-2 flex items-center gap-1">
+                 <MessageSquare size={12} /> Notes
+               </p>
+               {noteEntries.length > 0 && (
+                 <div className="space-y-2">
+                   {noteEntries.map((note, i) => (
+                     <div key={i} className="bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                       <div className="flex items-center justify-between gap-2">
+                         <p className="text-xs font-semibold text-slate-600">
+                           {note.byName || 'Unknown'}
+                           {note.legacy && (
+                             <span className="ml-1.5 bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">note</span>
+                           )}
+                         </p>
+                         {note.at && (
+                           <span className="text-[10px] text-slate-400 whitespace-nowrap">{note.at.toLocaleString()}</span>
+                         )}
+                       </div>
+                       <p className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{note.text}</p>
+                     </div>
+                   ))}
+                 </div>
+               )}
+               {canAddNote && (
+                 <div className="flex gap-2 mt-2">
+                   <input
+                     type="text"
+                     value={noteText}
+                     onChange={(e) => setNoteText(e.target.value)}
+                     onKeyDown={(e) => { if (e.key === 'Enter') handleAddNote(); }}
+                     placeholder="Add a note for the team..."
+                     className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none"
+                   />
+                   <button
+                     onClick={handleAddNote}
+                     disabled={!noteText.trim() || savingNote}
+                     className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                   >
+                     {savingNote ? 'Adding...' : 'Add'}
+                   </button>
+                 </div>
+               )}
+             </div>
+           )}
         </div>
 
-        <div className="p-4 bg-slate-50 border-t border-slate-100">
-          <button onClick={onClose} className="w-full py-2 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800">
+        <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-2">
+          {canCancel && (
+            <button
+              onClick={() => onCancelTicket(ticket)}
+              className="px-4 py-2 border border-red-200 text-red-600 rounded-lg font-medium hover:bg-red-50 flex items-center justify-center gap-1.5"
+            >
+              <Ban size={14} /> Cancel ticket
+            </button>
+          )}
+          <button onClick={onClose} className="flex-1 py-2 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800">
             Close
           </button>
         </div>
@@ -523,9 +632,16 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
   // Technician display name (used for claim + completion writes)
   const techDisplayName = userData?.displayName || userData?.firstName || userData?.email?.split('@')[0] || 'Technician';
 
-  // Active = open or in_progress. Excludes 'resolved' AND 'duplicate'.
+  const actor = actorFrom(userData);
+  const showInsights = can(actor, 'ticket.update.status');
+  const tabs = useMemo(
+    () => (showInsights ? [...TABS, { key: 'insights', label: 'Insights' }] : TABS),
+    [showInsights]
+  );
+
+  // Active = still needs work. Excludes 'resolved', 'duplicate' AND 'cancelled'.
   const activeTickets = useMemo(
-    () => tickets.filter(t => t.status === 'open' || t.status === 'in_progress'),
+    () => tickets.filter(isActiveTicket),
     [tickets]
   );
 
@@ -550,7 +666,7 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
     setStatusView('all');
   };
 
-  // Calculate Stats (duplicates excluded everywhere)
+  // Calculate Stats (duplicates and cancelled excluded everywhere)
   const stats = useMemo(() => ({
     open: poolTickets.length,
     inProgress: activeTickets.filter(t => t.status === 'in_progress').length,
@@ -723,8 +839,53 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
     }
   };
 
+  const cancelTicket = async (ticket) => {
+    const reason = window.prompt('Cancel this ticket? Enter a reason (required):');
+    if (reason === null) return;
+    const cancelReason = reason.trim();
+    if (!cancelReason) {
+      alert('A reason is required to cancel a ticket.');
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'maintenance_tickets', ticket.id), {
+        status: 'cancelled',
+        cancelReason,
+        cancelledAt: serverTimestamp(),
+        cancelledByUid: user.uid,
+        cancelledByName: techDisplayName,
+        ...auditUpdate(user.uid),
+      });
+      setShowDetailModal(false);
+    } catch (e) {
+      console.error(e);
+      alert("Error cancelling ticket");
+    }
+  };
+
+  // serverTimestamp() is not allowed inside arrayUnion — Timestamp.now()
+  // (client clock) is the documented alternative for array entries.
+  const addTicketNote = async (ticket, text) => {
+    await updateDoc(doc(db, 'maintenance_tickets', ticket.id), {
+      notesThread: arrayUnion({
+        byUid: user.uid,
+        byName: techDisplayName,
+        text,
+        at: Timestamp.now(),
+      }),
+      ...auditUpdate(user.uid),
+    });
+  };
+
   const hasActiveFilters = Boolean(searchQuery) || priorityFilter !== 'all' || statusView !== 'all';
-  const tabLabel = TABS.find(t => t.key === activeTab)?.label || 'Active Tickets';
+  const tabLabel = tabs.find(t => t.key === activeTab)?.label || 'Active Tickets';
+
+  // The detail modal holds a snapshot from click time; resolve it back to the
+  // live subscribed ticket so note adds / cancels show up without reopening.
+  const detailTicketLive = useMemo(
+    () => (detailTicket ? tickets.find(t => t.id === detailTicket.id) ?? detailTicket : null),
+    [tickets, detailTicket]
+  );
 
   const renderEmptyState = () => (
     <div className="text-center py-12">
@@ -795,7 +956,7 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
 
       {/* Tabs */}
       <div className="bg-white rounded-2xl border border-slate-200 p-1.5 flex gap-1">
-        {TABS.map(tab => {
+        {tabs.map(tab => {
           const isActive = activeTab === tab.key;
           return (
             <button
@@ -807,16 +968,22 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
               }`}
             >
               {tab.label}
-              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
-              }`}>
-                {tabCounts[tab.key]}
-              </span>
+              {tabCounts[tab.key] != null && (
+                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                  isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {tabCounts[tab.key]}
+                </span>
+              )}
             </button>
           );
         })}
       </div>
 
+      {activeTab === 'insights' ? (
+        <SupervisorDashboard tickets={tickets} />
+      ) : (
+      <>
       {/* Search & Filter Bar */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4">
         <div className="flex flex-col md:flex-row gap-3">
@@ -933,6 +1100,8 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Scheduled Tasks Card */}
       {scheduledTasks.length > 0 && (
@@ -1052,7 +1221,15 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
         onComplete={completeTask}
         technicianName={techDisplayName}
       />
-      <TicketDetailModal isOpen={showDetailModal} onClose={() => setShowDetailModal(false)} ticket={detailTicket} getDisplayName={getDisplayName} />
+      <TicketDetailModal
+        isOpen={showDetailModal}
+        onClose={() => setShowDetailModal(false)}
+        ticket={detailTicketLive}
+        getDisplayName={getDisplayName}
+        actor={actor}
+        onCancelTicket={cancelTicket}
+        onAddNote={addTicketNote}
+      />
 
     </div>
   );

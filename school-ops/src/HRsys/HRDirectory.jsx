@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { NATIONALITIES, BAHRAIN_BANKS } from '../constants';
+import { NATIONALITIES, BAHRAIN_BANKS, ROLE_LABELS, DEPARTMENT_LABELS } from '../constants';
 import { actorFrom, can } from '../permissions';
 import { useUsers } from '../data/useUsers';
+import { complianceAlertsFor } from '../hr/compliance';
+import { toCSV, csvReport, downloadReport } from '../hr/reports';
 import {
   Search, Filter, Users, User, Mail, Phone, MapPin, Building2,
   Calendar, CreditCard, FileText, Shield, ChevronRight, ChevronDown,
@@ -33,17 +35,19 @@ const StatusBadge = ({ status }) => {
 };
 
 const RoleBadge = ({ role }) => {
+  // Head Admin gets indigo-700, distinct from admin's slate — CLAUDE.md 2.6.
   const styles = {
-    admin: { bg: 'bg-purple-100', text: 'text-purple-800', label: 'Admin' },
-    hr: { bg: 'bg-blue-100', text: 'text-blue-800', label: 'HR' },
-    maintenance: { bg: 'bg-orange-100', text: 'text-orange-800', label: 'Maint.' },
-    staff: { bg: 'bg-slate-100', text: 'text-slate-700', label: 'Staff' }
+    super_admin: { bg: 'bg-indigo-700', text: 'text-white' },
+    admin: { bg: 'bg-slate-700', text: 'text-white' },
+    hr: { bg: 'bg-blue-100', text: 'text-blue-800' },
+    maintenance: { bg: 'bg-orange-100', text: 'text-orange-800' },
+    staff: { bg: 'bg-slate-100', text: 'text-slate-700' }
   };
   const style = styles[role] || styles.staff;
-  
+
   return (
     <span className={`px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wide whitespace-nowrap ${style.bg} ${style.text}`}>
-      {style.label}
+      {ROLE_LABELS[role] || ROLE_LABELS.staff}
     </span>
   );
 };
@@ -212,8 +216,8 @@ const EmployeeRow = ({ employee, onClick, isSelected, canManage }) => {
       <td className="px-4 py-4">
         <div className="flex items-center gap-2 text-sm text-slate-700">
           <Calendar size={14} className="text-slate-400" />
-          {employee.dateOfJoining?.toDate 
-            ? employee.dateOfJoining.toDate().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+          {employee.dateOfJoining instanceof Date
+            ? employee.dateOfJoining.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
             : '—'
           }
         </div>
@@ -230,30 +234,11 @@ const EmployeeRow = ({ employee, onClick, isSelected, canManage }) => {
 };
 
 // ============================================================================
-// COMPLIANCE CHECK HELPER
+// COMPLIANCE CHECK HELPER — delegates to the shared compliance module
 // ============================================================================
 
 function checkComplianceStatus(employee) {
-  const now = new Date();
-  const threeMonths = new Date();
-  threeMonths.setMonth(now.getMonth() + 3);
-  
-  // Check CPR Expiry
-  if (employee.cprExpiry?.toDate) {
-    const expiry = employee.cprExpiry.toDate();
-    if (expiry < threeMonths) return true;
-  }
-  
-  // Check Visa Expiry (Non-Bahrainis)
-  if (employee.nationality !== 'Bahraini' && employee.residencePermitExpiry?.toDate) {
-    const expiry = employee.residencePermitExpiry.toDate();
-    if (expiry < threeMonths) return true;
-  }
-  
-  // Check Missing IBAN
-  if (!employee.iban || !employee.iban.startsWith('BH')) return true;
-  
-  return false;
+  return complianceAlertsFor(employee).length > 0;
 }
 
 // ============================================================================
@@ -263,6 +248,7 @@ function checkComplianceStatus(employee) {
 const FilterSidebar = ({ filters, setFilters, employees }) => {
   const roleOptions = [
     { value: 'all', label: 'All Roles' },
+    { value: 'super_admin', label: ROLE_LABELS.super_admin },
     { value: 'admin', label: 'Administrators' },
     { value: 'hr', label: 'HR Managers' },
     { value: 'maintenance', label: 'Maintenance' },
@@ -413,7 +399,7 @@ export default function HRDirectory({ user, userData, onSelectEmployee }) {
   const canManageUsers = can(actor, 'user.invite');
 
   // Real-time users subscription, filtered by what this actor can see.
-  const { data: allUsers = [], isLoading: loading } = useUsers(Boolean(userData));
+  const { data: allUsers = [], isLoading: loading } = useUsers(actor, Boolean(userData));
   const employees = useMemo(() => {
     return allUsers
       .filter(u => can(actor, 'user.view.profile', {
@@ -480,6 +466,23 @@ export default function HRDirectory({ user, userData, onSelectEmployee }) {
       key,
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
     }));
+  };
+
+  const handleExport = () => {
+    const rows = [
+      ['Name', 'Email', 'Role', 'Department', 'Position', 'Phone', 'Status', 'Joined'],
+      ...filteredEmployees.map(emp => [
+        emp.displayName || `${emp.firstName || ''} ${emp.lastName || ''}`.trim(),
+        emp.email || '',
+        ROLE_LABELS[emp.role] || ROLE_LABELS.staff,
+        DEPARTMENT_LABELS[emp.department] || emp.department || '',
+        emp.position || '',
+        emp.phoneNumber || '',
+        emp.status || '',
+        emp.dateOfJoining instanceof Date ? emp.dateOfJoining.toLocaleDateString('en-GB') : '',
+      ]),
+    ];
+    downloadReport(csvReport('staff_directory', toCSV(rows)));
   };
   
   // Loading State
@@ -567,7 +570,11 @@ export default function HRDirectory({ user, userData, onSelectEmployee }) {
               </div>
               
               {/* Export */}
-              <button className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2">
+              <button
+                onClick={handleExport}
+                disabled={filteredEmployees.length === 0}
+                className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 <Download size={16} />
                 Export
               </button>

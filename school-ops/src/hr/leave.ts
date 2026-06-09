@@ -16,7 +16,7 @@
 //   - unpaid:      manager discretion
 
 import { SICK_LEAVE_TIERS, type LeaveType } from "../constants";
-import type { User } from "../types";
+import type { LeaveRequest, User } from "../types";
 
 export interface LeaveBalance {
   /**
@@ -143,4 +143,43 @@ export function debitLeave(
   const before = next[type] || { entitled: DEFAULT_ENTITLEMENTS[type], used: 0 };
   next[type] = { entitled: before.entitled, used: Math.max(0, before.used + days) };
   return next;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function atMidnight(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/**
+ * Inclusive calendar days between two dates (same day = 1). Returns 0 for
+ * invalid dates or when `end` is before `start`.
+ */
+export function daysRequestedBetween(start: Date, end: Date): number {
+  if (!(start instanceof Date) || !(end instanceof Date)) return 0;
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+  const s = atMidnight(start);
+  const e = atMidnight(end);
+  if (e < s) return 0;
+  return Math.round((e.getTime() - s.getTime()) / DAY_MS) + 1;
+}
+
+/**
+ * First pending/approved request whose [leaveStart, leaveEnd] range intersects
+ * the given range (inclusive, day granularity), or null if none does.
+ */
+export function findOverlap(requests: LeaveRequest[], start: Date, end: Date): LeaveRequest | null {
+  if (!(start instanceof Date) || !(end instanceof Date)) return null;
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+  const s = atMidnight(start).getTime();
+  const e = atMidnight(end).getTime();
+  for (const request of requests) {
+    if (request.status !== "pending" && request.status !== "approved") continue;
+    if (!(request.leaveStart instanceof Date) || !(request.leaveEnd instanceof Date)) continue;
+    if (isNaN(request.leaveStart.getTime()) || isNaN(request.leaveEnd.getTime())) continue;
+    const rs = atMidnight(request.leaveStart).getTime();
+    const re = atMidnight(request.leaveEnd).getTime();
+    if (rs <= e && re >= s) return request;
+  }
+  return null;
 }

@@ -8,3 +8,5 @@ export { dailyComplianceScan } from "./dailyComplianceScan";
 export { deleteUser, updateUserRole, updateUserStatus } from "./userMutations";
 export { bootstrapSuperAdmin } from "./bootstrapSuperAdmin";
 export { onTicketStatusChange } from "./onTicketStatusChange";
+export { decideLeaveRequest } from "./decideLeaveRequest";
+export { updateSchoolSettings } from "./updateSchoolSettings";

@@ -26,17 +26,23 @@ export interface InviteEmailParams {
   role: string;
 }
 
+interface DeliverParams {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}
+
 /**
- * Returns true if email was actually sent, false if it was logged for manual
- * delivery (key not configured) or if the Resend API rejected it.
+ * Shared Resend delivery. Returns true on success, false when the API key is
+ * absent or Resend rejects the message — callers fall back to manual sharing.
  */
-export async function sendInviteEmail(params: InviteEmailParams): Promise<boolean> {
+async function deliver(params: DeliverParams): Promise<boolean> {
   const apiKey = RESEND_API_KEY.value();
   if (!apiKey || apiKey === "unset") {
     logger.warn(
-      "RESEND_API_KEY not configured — invite email NOT sent. " +
-        "Admin should manually share this URL with the user.",
-      { to: params.to, inviteUrl: params.inviteUrl },
+      "RESEND_API_KEY not configured — email NOT sent.",
+      { to: params.to, subject: params.subject },
     );
     return false;
   }
@@ -45,6 +51,33 @@ export async function sendInviteEmail(params: InviteEmailParams): Promise<boolea
   const { Resend } = await import("resend");
   const resend = new Resend(apiKey);
 
+  try {
+    const result = await resend.emails.send({
+      from: FROM_ADDRESS,
+      to: params.to,
+      subject: params.subject,
+      text: params.text,
+      html: params.html,
+    });
+
+    if (result.error) {
+      logger.error("Resend rejected the email", { error: result.error, to: params.to });
+      return false;
+    }
+
+    logger.info("Email sent via Resend", { id: result.data?.id, to: params.to, subject: params.subject });
+    return true;
+  } catch (err) {
+    logger.error("Resend send threw", err);
+    return false;
+  }
+}
+
+/**
+ * Returns true if email was actually sent, false if it was logged for manual
+ * delivery (key not configured) or if the Resend API rejected it.
+ */
+export async function sendInviteEmail(params: InviteEmailParams): Promise<boolean> {
   const subject = `You've been invited to Al Fajer School Operations`;
   const text = [
     `Hi ${params.recipientName},`,
@@ -80,26 +113,72 @@ export async function sendInviteEmail(params: InviteEmailParams): Promise<boolea
     </div>
   `;
 
-  try {
-    const result = await resend.emails.send({
-      from: FROM_ADDRESS,
-      to: params.to,
-      subject,
-      text,
-      html,
-    });
+  return deliver({ to: params.to, subject, text, html });
+}
 
-    if (result.error) {
-      logger.error("Resend rejected the email", { error: result.error, to: params.to });
-      return false;
-    }
+export interface ComplianceAlertItem {
+  severity: "critical" | "warning" | "info";
+  message: string;
+}
 
-    logger.info("Invite email sent via Resend", { id: result.data?.id, to: params.to });
-    return true;
-  } catch (err) {
-    logger.error("Resend send threw", err);
-    return false;
-  }
+export interface ComplianceAlertEmailParams {
+  to: string;
+  name: string;
+  items: ComplianceAlertItem[];
+  /** Base URL of the client app (no trailing slash); links to appUrl + "/profile". */
+  appUrl: string;
+}
+
+/**
+ * Daily compliance scan alert. Same delivery semantics as sendInviteEmail:
+ * returns true only when Resend actually accepted the message.
+ */
+export async function sendComplianceAlertEmail(params: ComplianceAlertEmailParams): Promise<boolean> {
+  const profileUrl = `${params.appUrl}/profile`;
+  const subject = "Action needed: compliance alert from Al Fajer School";
+
+  const text = [
+    `Hi ${params.name},`,
+    "",
+    "The daily compliance check found the following item(s) that need your attention:",
+    "",
+    ...params.items.map((i) => `- ${i.severity === "critical" ? "[CRITICAL] " : ""}${i.message}`),
+    "",
+    "Review and update your details here:",
+    profileUrl,
+    "",
+    "— Al Fajer School HR",
+  ].join("\n");
+
+  const listItems = params.items
+    .map((i) => {
+      const line = escapeHtml(i.message);
+      return i.severity === "critical"
+        ? `<li style="margin: 6px 0;"><strong style="color: #dc2626;">${line}</strong></li>`
+        : `<li style="margin: 6px 0;">${line}</li>`;
+    })
+    .join("\n        ");
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 540px; margin: 0 auto; padding: 24px; color: #1e293b;">
+      <h2 style="color: #4f46e5; margin: 0 0 16px;">Compliance alert</h2>
+      <p>Hi ${escapeHtml(params.name)},</p>
+      <p>The daily compliance check found the following item(s) that need your attention:</p>
+      <ul style="padding-left: 20px;">
+        ${listItems}
+      </ul>
+      <p style="margin: 24px 0;">
+        <a href="${profileUrl}" style="display: inline-block; background: #4f46e5; color: white; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600;">Open my profile</a>
+      </p>
+      <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+      <p style="font-size: 12px; color: #94a3b8;">
+        Questions? Contact the HR office.<br>
+        — Al Fajer School HR
+      </p>
+    </div>
+  `;
+
+  return deliver({ to: params.to, subject, text, html });
 }
 
 function escapeHtml(s: string): string {

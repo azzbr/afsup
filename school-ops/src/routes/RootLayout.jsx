@@ -16,6 +16,7 @@ import { db } from '../firebase';
 import { initializeAuth, onAuthStateChange, signOutUser } from '../auth';
 import { ROLES } from '../constants';
 import { actorFrom } from '../permissions';
+import { queryClient } from '../data/queryClient';
 
 import Layout from '../Layout';
 import LoginModal from '../components/LoginModal';
@@ -99,9 +100,13 @@ export default function RootLayout() {
 
           if (snap.exists()) {
             const data = snap.data();
-            // Pending users are blocked from the system.
-            if (data.status !== 'approved' && data.role !== 'admin') {
+            // Blocked/suspended users are ALWAYS signed out, regardless of
+            // role — an admin must not bypass a block. Other non-approved
+            // statuses (invited/pending) keep the legacy admin exemption.
+            const isBlockedOrSuspended = data.status === 'blocked' || data.status === 'suspended';
+            if (isBlockedOrSuspended || (data.status !== 'approved' && data.role !== 'admin')) {
               await signOutUser();
+              queryClient.clear();
               setUser(null);
               setUserData(null);
               setAuthLoading(false);
@@ -152,6 +157,9 @@ export default function RootLayout() {
 
   const handleSignOut = async () => {
     await signOutUser();
+    // Drop all cached query data so HR/profile data does not survive a
+    // sign-out on shared school computers.
+    queryClient.clear();
     navigate('/');
   };
 

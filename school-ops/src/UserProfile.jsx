@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, getDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db } from './firebase';
 import { uploadFile } from './storage';
 import {
@@ -10,7 +10,9 @@ import {
   SUBJECTS, GRADES, BLOOD_TYPES,
   LEAVE_TYPES, LEAVE_TYPE_LABELS,
 } from './constants';
-import { resolveBalances, remainingDays } from './hr/leave';
+import { resolveBalances, remainingDays, daysRequestedBetween, findOverlap } from './hr/leave';
+import { auditCreate, auditUpdate } from './data/audit';
+import { useLeaveRequestsFor } from './data/useLeaveRequests';
 import {
   User, Calendar, CreditCard, Briefcase, Activity, AlertTriangle, Save,
   FileText, Eye, UploadCloud, Check, GraduationCap, Phone, Heart, Building2,
@@ -20,6 +22,9 @@ export default function UserProfile({ userData, user }) {
   const [formData, setFormData] = useState({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+
+  // Own leave requests (real-time) — used by the overlap guard on submit.
+  const { data: ownLeaveRequests } = useLeaveRequestsFor(user?.uid ?? null);
 
   // Derive "isBahraini" for conditional logic (KEY FEATURE)
   const isBahraini = formData.nationality === 'Bahraini';
@@ -170,51 +175,112 @@ export default function UserProfile({ userData, user }) {
       }
     }
 
-    // Financial Validation: Prevent negative salaries and allowances
-    const basicSalary = parseFloat(formData.basicSalary);
-    const housing = parseFloat(formData.housingAllowance || 0);
-    const transport = parseFloat(formData.transportAllowance || 0);
-    const phone = parseFloat(formData.phoneAllowance || 0);
-
-    if (basicSalary && basicSalary < 0) {
-      alert("Basic salary cannot be negative.");
-      setLoading(false);
-      return;
-    }
-    if (housing < 0 || transport < 0 || phone < 0) {
-      alert("Allowances cannot be negative.");
-      setLoading(false);
-      return;
-    }
-
-    // Prevent unrealistically high values (potential data corruption)
-    if (basicSalary > 100000 || housing > 50000 || transport > 20000 || phone > 5000) {
-      if (!confirm("Warning: You entered unusually high values. Are you sure this is correct?")) {
-        setLoading(false);
-        return;
-      }
-    }
-
     try {
       const dateOrNull = (s) => (s ? new Date(s) : null);
+      // Explicit allowlist of profile fields. formData also carries leave-form
+      // scratch state (leaveType/leaveStart/leaveEnd/leaveReason) that must
+      // never be written onto the user document.
+      //
+      // HR/admin-only fields (basicSalary, allowances, sickDaysUsed,
+      // annualLeaveBalance, dateOfJoining, employeeNumber) are deliberately
+      // ABSENT: firestore.rules restrictedSelfFields() rejects any own-doc
+      // write touching them, so including them (even unchanged) would fail
+      // the whole save. HR maintains them via EmployeeDetailView.
       const updates = {
-        ...formData,
-        // Convert date strings back to Firestore Timestamps or null
-        cprExpiry: dateOrNull(formData.cprExpiry),
-        passportExpiry: dateOrNull(formData.passportExpiry),
-        residencePermitExpiry: dateOrNull(formData.residencePermitExpiry),
-        dateOfJoining: dateOrNull(formData.dateOfJoining),
+        // Identity
+        firstName: formData.firstName,
+        middleName: formData.middleName,
+        lastName: formData.lastName,
+        arabicName: formData.arabicName,
+        nationality: formData.nationality,
+        gender: formData.gender,
+        maritalStatus: formData.maritalStatus,
         dateOfBirth: dateOrNull(formData.dateOfBirth),
+
+        // Documents
+        cprNumber: formData.cprNumber,
+        cprExpiry: dateOrNull(formData.cprExpiry),
+        passportNumber: formData.passportNumber,
+        passportExpiry: dateOrNull(formData.passportExpiry),
+
+        // Visa (non-Bahraini)
+        residencePermitNumber: formData.residencePermitNumber,
+        residencePermitExpiry: dateOrNull(formData.residencePermitExpiry),
+        workPermitNumber: formData.workPermitNumber,
+
+        // Banking
+        iban: formData.iban,
+        bankName: formData.bankName,
+
+        // Contact
+        phoneNumber: formData.phoneNumber,
+
+        // Employment details (Phase 2.5)
+        position: formData.position,
+        department: formData.department,
+        contractType: formData.contractType,
         contractStartDate: dateOrNull(formData.contractStartDate),
         contractEndDate: dateOrNull(formData.contractEndDate),
         probationEndDate: dateOrNull(formData.probationEndDate),
+
+        // Teacher
+        isTeacher: formData.isTeacher,
+        subjects: formData.subjects,
+        gradesTaught: formData.gradesTaught,
+        homeroomClass: formData.homeroomClass,
+        moeApprovalStatus: formData.moeApprovalStatus,
         moeApprovalExpiry: dateOrNull(formData.moeApprovalExpiry),
+        teachingLicenseNumber: formData.teachingLicenseNumber,
         teachingLicenseExpiry: dateOrNull(formData.teachingLicenseExpiry),
-        // Coerce numerics
         yearsExperienceTotal: formData.yearsExperienceTotal ? Number(formData.yearsExperienceTotal) : null,
         yearsAtAFS: formData.yearsAtAFS ? Number(formData.yearsAtAFS) : null,
-        updatedAt: new Date(),
-        updatedBy: user.uid,
+
+        // Emergency contact
+        emergencyContactName: formData.emergencyContactName,
+        emergencyContactRelationship: formData.emergencyContactRelationship,
+        emergencyContactPhone: formData.emergencyContactPhone,
+        emergencyContactAltPhone: formData.emergencyContactAltPhone,
+
+        // Medical
+        bloodType: formData.bloodType,
+        allergies: formData.allergies,
+        medicalConditions: formData.medicalConditions,
+        healthIssues: formData.healthIssues,
+        insuranceProvider: formData.insuranceProvider,
+        insurancePolicyNumber: formData.insurancePolicyNumber,
+
+        // Extended identity
+        personalEmail: formData.personalEmail,
+        fatherName: formData.fatherName,
+        religion: formData.religion,
+        secondaryPhone: formData.secondaryPhone,
+
+        // Bahrain address
+        bahrainAddressHouse: formData.bahrainAddressHouse,
+        bahrainAddressFlat: formData.bahrainAddressFlat,
+        bahrainAddressRoad: formData.bahrainAddressRoad,
+        bahrainAddressBlock: formData.bahrainAddressBlock,
+        bahrainAddressArea: formData.bahrainAddressArea,
+
+        // Home country
+        homeCountryAddress: formData.homeCountryAddress,
+        homeCountryEmergency1Name: formData.homeCountryEmergency1Name,
+        homeCountryEmergency1Phone: formData.homeCountryEmergency1Phone,
+        homeCountryEmergency1Relationship: formData.homeCountryEmergency1Relationship,
+        homeCountryEmergency2Name: formData.homeCountryEmergency2Name,
+        homeCountryEmergency2Phone: formData.homeCountryEmergency2Phone,
+        homeCountryEmergency2Relationship: formData.homeCountryEmergency2Relationship,
+
+        // Family
+        spouseName: formData.spouseName,
+        spouseCprNumber: formData.spouseCprNumber,
+        spouseJobTitle: formData.spouseJobTitle,
+        spouseCompanyName: formData.spouseCompanyName,
+        spouseCompanyLocation: formData.spouseCompanyLocation,
+        childrenInfo: formData.childrenInfo,
+        childrenCprNumbers: formData.childrenCprNumbers,
+
+        ...auditUpdate(user.uid),
       };
 
       // Clean up Expat fields if user switched to Bahraini (SMART LOGIC)
@@ -240,13 +306,32 @@ export default function UserProfile({ userData, user }) {
     setMessage('');
 
     // Validation
-    if (!formData.leaveStart || !formData.leaveEnd || !formData.leaveDays) {
-      alert("Please fill in all leave request fields");
+    if (!formData.leaveStart || !formData.leaveEnd) {
+      alert("Please select both a start and an end date.");
       setLoading(false);
       return;
     }
 
-    const daysRequested = parseInt(formData.leaveDays);
+    const start = new Date(formData.leaveStart);
+    const end = new Date(formData.leaveEnd);
+
+    // daysRequestedBetween returns 0 for invalid dates or end-before-start.
+    const daysRequested = daysRequestedBetween(start, end);
+    if (daysRequested === 0) {
+      alert("Invalid date range: the end date must be on or after the start date.");
+      setLoading(false);
+      return;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    if (startDay < today) {
+      alert("Leave must start today or in the future. Past dates cannot be requested.");
+      setLoading(false);
+      return;
+    }
+
     const leaveType = formData.leaveType || 'annual';
     const isOpenEnded = leaveType === 'unpaid' || leaveType === 'study';
 
@@ -260,19 +345,33 @@ export default function UserProfile({ userData, user }) {
       }
     }
 
+    // Overlap guard: refuse if the range intersects any pending/approved request.
+    const conflict = findOverlap(ownLeaveRequests || [], start, end);
+    if (conflict) {
+      const fmtDate = (d) => (d instanceof Date ? d.toLocaleDateString() : 'unknown');
+      alert(
+        `This request overlaps your existing ${conflict.status} ` +
+        `${LEAVE_TYPE_LABELS[conflict.leaveType] || conflict.leaveType || ''} request ` +
+        `from ${fmtDate(conflict.leaveStart)} to ${fmtDate(conflict.leaveEnd)}.`
+      );
+      setLoading(false);
+      return;
+    }
+
     try {
       // Create leave request in Firestore — Phase 2.7 includes leaveType
       await addDoc(collection(db, 'leave_requests'), {
         userId: user.uid,
         employeeName: `${formData.firstName} ${formData.lastName}`.trim(),
-        leaveType: formData.leaveType || 'annual',
-        leaveStart: new Date(formData.leaveStart),
-        leaveEnd: new Date(formData.leaveEnd),
+        leaveType,
+        leaveStart: start,
+        leaveEnd: end,
         daysRequested,
         reason: formData.leaveReason || '',
         status: 'pending',
-        submittedAt: new Date(),
+        submittedAt: serverTimestamp(),
         submittedBy: user.uid,
+        ...auditCreate(user.uid),
       });
 
       // Clear form fields
@@ -280,7 +379,6 @@ export default function UserProfile({ userData, user }) {
         ...formData,
         leaveStart: '',
         leaveEnd: '',
-        leaveDays: '',
         leaveReason: ''
       });
 
@@ -648,49 +746,46 @@ export default function UserProfile({ userData, user }) {
            <h3 className="text-xl font-semibold text-slate-800 border-b pb-2 flex items-center gap-2">
              <CreditCard size={20}/> Salary & Allowances (WPS Compliant)
            </h3>
+           <p className="text-xs text-slate-500 -mt-2">Set by HR. Contact HR if any figure looks wrong.</p>
            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
              <div>
                <label className="block text-sm font-medium text-slate-700 mb-1">Basic Salary</label>
                <input
                  type="number"
-                 step="0.01"
-                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 readOnly
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 cursor-not-allowed text-slate-500"
                  placeholder="BHD 0.00"
                  value={formData.basicSalary}
-                 onChange={e => setFormData({...formData, basicSalary: e.target.value})}
                />
              </div>
              <div>
                <label className="block text-sm font-medium text-slate-700 mb-1">Housing Allowance</label>
                <input
                  type="number"
-                 step="0.01"
-                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 readOnly
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 cursor-not-allowed text-slate-500"
                  placeholder="BHD 0.00"
                  value={formData.housingAllowance}
-                 onChange={e => setFormData({...formData, housingAllowance: e.target.value})}
                />
              </div>
              <div>
                <label className="block text-sm font-medium text-slate-700 mb-1">Transport Allowance</label>
                <input
                  type="number"
-                 step="0.01"
-                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 readOnly
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 cursor-not-allowed text-slate-500"
                  placeholder="BHD 0.00"
                  value={formData.transportAllowance}
-                 onChange={e => setFormData({...formData, transportAllowance: e.target.value})}
                />
              </div>
              <div>
                <label className="block text-sm font-medium text-slate-700 mb-1">Phone Allowance</label>
                <input
                  type="number"
-                 step="0.01"
-                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 readOnly
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 cursor-not-allowed text-slate-500"
                  placeholder="BHD 0.00"
                  value={formData.phoneAllowance}
-                 onChange={e => setFormData({...formData, phoneAllowance: e.target.value})}
                />
              </div>
            </div>
@@ -747,6 +842,11 @@ export default function UserProfile({ userData, user }) {
              const selectedBalance = balances[selectedType];
              const remaining = remainingDays(selectedBalance);
              const isOpenEnded = selectedType === 'unpaid' || selectedType === 'study';
+             // Days are computed from the date range, never hand-typed.
+             const computedDays = (formData.leaveStart && formData.leaveEnd)
+               ? daysRequestedBetween(new Date(formData.leaveStart), new Date(formData.leaveEnd))
+               : 0;
+             const rangeInvalid = Boolean(formData.leaveStart && formData.leaveEnd && computedDays === 0);
 
              return (
                <>
@@ -818,16 +918,20 @@ export default function UserProfile({ userData, user }) {
                      <div>
                        <label className="block text-sm font-medium text-emerald-800 mb-1">Days Requested</label>
                        <input
-                         type="number"
-                         min="1"
-                         max={isOpenEnded ? undefined : remaining}
-                         className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white"
-                         placeholder="Number of days"
-                         value={(formData.leaveDays || '')}
-                         onChange={e => setFormData({...formData, leaveDays: e.target.value})}
+                         type="text"
+                         readOnly
+                         className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-emerald-50 cursor-not-allowed"
+                         value={computedDays > 0 ? `${computedDays} day${computedDays === 1 ? '' : 's'}` : '-'}
                        />
+                       <p className="text-xs text-emerald-600 mt-1">Calculated from the date range (inclusive).</p>
                      </div>
                    </div>
+
+                   {rangeInvalid && (
+                     <p className="text-xs font-medium text-red-600 mb-4">
+                       The end date must be on or after the start date.
+                     </p>
+                   )}
 
                    <div className="mb-4">
                      <label className="block text-sm font-medium text-emerald-800 mb-1">
@@ -871,10 +975,11 @@ export default function UserProfile({ userData, user }) {
                <label className="block text-sm font-medium text-slate-700 mb-1">Date of Joining</label>
                <input
                  type="date"
-                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                 readOnly
+                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 cursor-not-allowed text-slate-500"
                  value={formData.dateOfJoining}
-                 onChange={e => setFormData({...formData, dateOfJoining: e.target.value})}
                />
+               <p className="text-xs text-slate-400 mt-1">Set by HR; ask HR to correct.</p>
              </div>
              <div>
                <label className="block text-sm font-medium text-slate-700 mb-1">Annual Leave Balance (Read Only)</label>
@@ -1054,10 +1159,10 @@ export default function UserProfile({ userData, user }) {
               <label className="block text-sm font-medium text-slate-700 mb-1">Employee Number</label>
               <input
                 type="text"
-                placeholder="e.g. AFS-0142"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                readOnly
+                placeholder="Assigned by HR"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 cursor-not-allowed text-slate-500"
                 value={formData.employeeNumber}
-                onChange={e => setFormData({...formData, employeeNumber: e.target.value})}
               />
             </div>
             <div>
@@ -1483,7 +1588,7 @@ export default function UserProfile({ userData, user }) {
         </section>
 
         {/* Submit Leave Request */}
-        {formData.leaveStart && formData.leaveEnd && formData.leaveDays && (
+        {formData.leaveStart && formData.leaveEnd && (
           <button
             type="button"
             onClick={handleLeaveRequest}

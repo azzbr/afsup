@@ -182,6 +182,13 @@ export interface User extends Partial<AuditFields> {
 // MAINTENANCE TICKETS
 // ============================================================================
 
+export interface TicketNote {
+  byUid: string;
+  byName: string;
+  text: string;
+  at: Date | null;
+}
+
 export interface Ticket extends Partial<AuditFields> {
   id: string;
   category: IssueCategory | string;
@@ -228,6 +235,13 @@ export interface Ticket extends Partial<AuditFields> {
   duplicateOf?: string;
   reopenedAt?: Date | null;
   reopenCount?: number;
+
+  // Threaded notes + cancellation (additive, optional — legacy tickets lack them)
+  notesThread?: TicketNote[];
+  cancelledAt?: Date | null;
+  cancelledByUid?: string;
+  cancelledByName?: string;
+  cancelReason?: string;
 }
 
 // ============================================================================
@@ -279,6 +293,7 @@ export interface ScheduledTask extends Partial<AuditFields> {
 export type NotificationType =
   | "compliance"
   | "leave_request"
+  | "leave_decision"
   | "ticket_sla"
   | "ticket_assigned"
   | "ticket_update"
@@ -296,4 +311,31 @@ export interface NotificationDoc extends Partial<AuditFields> {
   body: string;
   link?: string;
   readAt?: Date | null;
+}
+
+// ============================================================================
+// SCHOOL SETTINGS — singleton doc school_settings/current (CLAUDE.md section 5)
+// All fields optional: the doc may not exist yet, and partial docs deep-merge
+// over DEFAULT_SCHOOL_SETTINGS via effectiveSettings().
+// ============================================================================
+
+export interface SchoolSettings {
+  schoolNameEn?: string;
+  schoolNameAr?: string;
+  domain?: string;
+  academicYearStart?: Date | null;
+  academicYearEnd?: Date | null;
+  workingDays?: string[];
+  weeklyOffDays?: string[];
+  publicHolidays?: { date: Date | null; label: string }[];
+  defaultAnnualLeaveDays?: number;
+  sickLeaveTiers?: { fullPay: number; halfPay: number; noPay: number };
+  gosi?: {
+    bahraini?: { employerRate?: number; employeeRate?: number };
+    expat?: { employerRate?: number; employeeRate?: number };
+  };
+  wps?: { employerCR?: string; bankRoutingCode?: string };
+  notifyOnCriticalCompliance?: string[];
+  updatedAt?: Date | null;
+  updatedBy?: string | null;
 }

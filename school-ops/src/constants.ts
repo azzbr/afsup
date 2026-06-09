@@ -50,7 +50,7 @@ export type LocationName = (typeof LOCATIONS)[number];
 export const PRIORITIES = ["low", "medium", "high", "critical"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
-export const TICKET_STATUSES = ["open", "in_progress", "resolved", "duplicate"] as const;
+export const TICKET_STATUSES = ["open", "in_progress", "resolved", "duplicate", "cancelled"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 
 // Two-level category taxonomy (Phase 2.8). Every legacy ISSUE_CATEGORIES
@@ -182,6 +182,16 @@ export const ROLES = {
 } as const;
 
 export type Role = (typeof ROLES)[keyof typeof ROLES];
+
+// UI display names. `super_admin` renders as "Head Admin" everywhere — the
+// role string stays the internal identifier (CLAUDE.md section 1 naming note).
+export const ROLE_LABELS: Record<Role, string> = {
+  staff: "Staff",
+  maintenance: "Maintenance",
+  hr: "HR",
+  admin: "Admin",
+  super_admin: "Head Admin",
+};
 
 // User account lifecycle — see CLAUDE.md section 7a
 export const USER_STATUSES = ["invited", "pending", "approved", "suspended", "blocked"] as const;
