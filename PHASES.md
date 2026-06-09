@@ -36,10 +36,12 @@ Phases 2.6 → 5 below take us there.
 | 1 — Foundation | ◐ Partial | TypeScript + Router + React Query + permissions.ts done. Cleanup tasks (audit fields everywhere, mobile menu) outstanding. |
 | 2 — Backend & invite flow | ✅ Done | Cloud Functions + invite flow + accept-invite live. Migration tasks remain. |
 | 2.5 — HR Domain Extension | ✅ Done | All schema + UI in production. Reports tab moved to 2.6. |
-| 2.6 — Head Admin role | ⏳ Next | This document is the kickoff. |
-| 2.7 — Multi-type leave | ⏳ Queued | Constants exist, UI doesn't. |
+| 2.6 — Head Admin role | ◐ Started | super_admin recognized everywhere + bootstrapSuperAdmin live. Settings UI, admin mgmt, guards remain. |
+| 2.6.1 — Audit hotfixes | 🔥 URGENT | June 2026 full-code audit found broken HR-role rules, data-wiping save, dead admin actions. See below. |
+| 2.7 — Multi-type leave | ⏳ Queued | Constants + balance lib exist; submission UI partial; approval must move server-side (see 2.6.1). |
+| 2.8 — Maintenance V2 | 🆕 Planned | Full redesign of Submit Request + Maintenance Queue. Plan below. |
 | 3 — Unification & polish | ⏳ Queued | Profile-merged-with-tickets view, PWA, Sentry. |
-| 4 — Automation | ◐ Started | dailyComplianceScan already exists. Schedule runner + SLA escalation remain. |
+| 4 — Automation | ◐ Started | dailyComplianceScan + runScheduledTasks exist. SLA escalation + event notifications remain. |
 | 5+ — Differentiators | 🆕 Planning | Sharpened by competitor research (see §Appendix A). |
 
 ---
@@ -81,6 +83,84 @@ Phases 2.6 → 5 below take us there.
 - **UI/rules drift.** The matrix is now 22 rows × 5 roles = 110 cells. Without the test suite, drift is inevitable. The test suite is non-negotiable.
 
 **Effort:** M (2–3 weeks: 1 week schema + functions + rules, 1 week UI, 0.5 week tests + migration playbook)
+
+---
+
+## Phase 2.6.1 — Audit hotfixes (June 2026 full-code audit)
+
+A line-by-line read of every source file found bugs that block real users today. These are **fix-first** — they outrank all new features. Full evidence in the audit conversation; summary here so the list survives.
+
+### Critical (broken for users right now)
+
+- [ ] **HR role cannot use the HR module.** `useUsers` subscribes to the whole `users` collection, but firestore.rules only lets `hr` read non-admin docs — Firestore denies list queries it can't prove safe for every doc, so the entire subscription fails for any real `hr`-role user. Same for `leave_requests`: HR's "all pending" query is denied (rules allow read only for admin/own), and `allow update: if isAdmin()` means HR cannot approve/reject leave at all. Works today only because current HR people hold the `admin` role. **Fix:** rules for users LIST (filtered queries + per-role read rules) or move HR list reads behind a Cloud Function / restructure rules; allow HR read+update on leave_requests per the §6 matrix.
+- [ ] **EmployeeDetailView wipes dates on save.** It expects Firestore Timestamps (`d?.toDate`) but receives JS Dates from `useUsers` → edit-form date inputs initialize empty → saving any field nulls `cprExpiry`, `passportExpiry`, `residencePermitExpiry`, `dateOfJoining`. Data loss on every HR edit via the detail view.
+- [ ] **EmployeeDetailView "Admin Actions" are all dead.** Status/role buttons write `role`/`status` via client `updateDoc` — firestore.rules makes both immutable from the client (Cloud Functions only). Delete uses client `deleteDoc` — rules say `allow delete: if false`. Every button errors. Also offers a `terminated` status that doesn't exist in the schema. **Fix:** call `updateUserRole`/`updateUserStatus`/`deleteUser` CFs like AdminView does; align status vocabulary.
+- [ ] **Same `.toDate` bug class in HR UI:** EmployeeDetailView compliance alerts never render, tenure never renders, HRDirectory "Joined" column always shows "—", `checkComplianceStatus` red dots fire only on the IBAN rule.
+
+### High
+
+- [ ] **Move leave approval server-side** (`decideLeaveRequest` CF): the client read-modify-write balance update has no transaction (double-approve = double-debit), is duplicated in AdminView + HRSystem (already drifting), and sends no notification to the employee.
+- [ ] **super_admin invisible in HR UI:** `canEdit = ['admin','hr'].includes(role)` excludes Head Admin from editing profiles; `isAdmin = role==='admin'` hides the Admin Actions tab; HRDirectory RoleBadge renders super_admin with the "Staff" badge. Replace every role-string check with `can()` (coding rule 2).
+- [ ] **Invite modal offers Head Admin but server rejects it:** `assignableRoles` now returns `super_admin` for Head Admins, but `inviteUser`'s `isValidRole` only accepts the four legacy roles → "Invalid role" error. Add super_admin to the CF (gated by `canAssignRole`).
+- [ ] **Self-edit field security gap:** rules let any user write their own `basicSalary` / `annualLeaveBalance` / `sickDaysUsed` (matrix says HR/admin only — "NEVER self"). UI hides the fields but the rules don't enforce it. Add field-level guards to the users UPDATE rule. Also: UserProfile's save spreads leave-form scratch fields (`leaveStart`, `leaveDays`, `leaveReason`) onto the user doc as junk.
+- [ ] **GOSI report uses pre-2024 rates and omits expats:** `hr/reports.ts` + HRReports.jsx hardcode 5%/8%→12% (employee 5%, employer 12%). Current rates: Bahraini 8% employee + 17% employer; expat 1% + 3% — and expats must appear in the submission. Read rates from `school_settings` (Phase 2.6) instead of literals.
+- [ ] **dailyComplianceScan emails are wrong:** critical alerts reuse the invite-email template ("you've been invited, role: CPR expired") and link to `https://afsup-3ff9b.web.app` — the app lives on Netlify. Needs a real alert template + correct base URL.
+
+### Medium
+
+- [ ] Ticket status changes (`startJob`, `completeTask`, escalate, batch ops) skip `updatedAt`/`updatedBy` (rule 5) and never notify the reporter (§7b promise).
+- [ ] "by b4bijuv" in the queue: `userData?.name` doesn't exist — use `displayName`. Identity fields on tickets are chaos (email here, uid there, free-typed name in resolvedBy) — standardize on `{uid, displayName}` pairs.
+- [ ] MaintenanceView's in-card sort dropdown is dead (`createdAt?.toDate?.()` on already-converted JS Dates → all rows compare equal); resolved history sorts by created not resolved date.
+- [ ] Scheduler: "Start Immediately" doesn't — it sets `lastRun=now`, so the first tickets appear after a full frequency period (180 days for the semi-annual task). Write `nextRun = now` at creation instead. The `nextDue` field written by AdminRoute is always null (form never sends `nextRun`) — delete it. UI should show computed due date (nextRun ?? lastRun+freq ?? startDate) instead of "N/A".
+- [ ] ReportForm anonymous first-submit uses a stale closure (`currentUser = localUser` right after sign-in) → `reportedBy: undefined` → Firestore addDoc throws on first attempt.
+- [ ] Dead buttons: HR "Export HR Report", "HR Settings", HRDirectory "Export", EmployeeDetailView "Print", no-op refresh buttons. Either wire or remove.
+- [ ] Blocked/suspended **admins** bypass RootLayout's sign-out gate (`status !== 'approved' && role !== 'admin'`); they're saved only by the Auth-disable flag at token refresh. Tighten the condition.
+- [ ] `queryClient` cache survives sign-out (shared school computers) — call `queryClient.clear()` in `handleSignOut`.
+- [ ] Leave submission: `daysRequested` is hand-typed, not computed from the date range (and not validated against it); no overlap check against existing approved leave; `submittedAt` uses client clock.
+- [ ] EmployeeDetailView Leave tab: history is a hardcoded empty placeholder (leave_requests for that uid are one query away); balance card reads only legacy `annualLeaveBalance`.
+- [ ] Compliance logic lives in 4 places (AdminView, HRSystem, EmployeeDetailView, dailyComplianceScan) with drifting thresholds. Collapse to one shared module (`hr/compliance.ts`) consumed by all three UI surfaces, until Phase 4 makes the CF the single source.
+
+---
+
+## Phase 2.8 — Maintenance System V2
+
+**Goal:** turn the maintenance module from an admin-flavored list into a tool the maintenance *team* actually runs their day from, and make the Submit form smart enough that the queue stays clean (no more five duplicate "Dirty or unclean areas — B5 G2B" tickets).
+
+**Why now:** the queue screenshot from production shows the failure modes plainly — duplicates flooding the list, everything "medium" priority, no assignment (one tech "b4bijuv" holding 9 jobs), no aging indicators, schedules showing "Next Due N/A", and a flat 26-item category dropdown.
+
+### 2.8a — Submit Request form V2
+
+| Change | Detail |
+|---|---|
+| **Two-level categories** | Replace the flat 26-item list with groups → subcategories: Climate (AC not cooling / leak / noise / thermostat), Electrical (lights / sockets / wiring hazard / fans), Plumbing & Water (leak / toilet / cooler / drainage), Furniture (chair / table / shelf / bench / blinds), Building (paint / ceiling / door & lock / window / flooring), Technology (smartboard / projector / PC / network / clock / PA), Cleaning & Hygiene (dirty / odor / pests / waste), Grounds (grass / trees / canopy / fence), Safety Hazard, Other. Keep a type-to-search box that matches across all subcategories so frequent reporters skip the tree entirely. Store both `categoryGroup` and `category` for analytics. |
+| **Duplicate guard** | On select of category+location, query open tickets with same pair; if any exist show "There are N open reports for this — add a photo/comment to the existing one instead?" with one-tap "+1 / add info" (increments a `reportCount` and appends note) or "Mine is different" to proceed. Kills the #1 queue-pollution problem. |
+| **Priority handled by triage, not reporter** | Reporters tap a severity hint ("Safety risk / Blocks teaching / Annoying / Cosmetic") which maps to a default priority; Safety auto-escalates. Maintenance/admin keep the real priority control. Today every reporter picks medium and the field is meaningless. |
+| **Location picker by building** | Group LOCATIONS by B3/B4/B5/Admin/Other with recent-first; sets up the V2 queue's "walk order" grouping. |
+| **Photo-first on mobile** | `capture="environment"` camera input, photos before description; description becomes optional when a photo + subcategory are present (most reports need no prose). |
+| **Confirmation with ticket number** | Show short ticket ref (last 6 of doc id) + link "track my reports" instead of `alert()`. Signed-in staff get a "My Reports" list (query exists already in useTickets own-scope). Fix the anonymous stale-closure bug as part of this. |
+
+### 2.8b — Maintenance Queue V2 (technician-first)
+
+| Change | Detail |
+|---|---|
+| **Three tabs: My Jobs / Unassigned / All** | "My Jobs" = assigned to me, in progress first. "Unassigned" = open pool with a one-tap **Claim** button. Today a tech has no view of "what am I doing"; everything is one long list. |
+| **Group duplicates** | Open tickets sharing category+location collapse into one card with a count chip ("×4") and a Merge action (`status: 'duplicate'`, `duplicateOf: <id>` on the children). Queue of 34 becomes ~20 real jobs. |
+| **Walk-order grouping** | Toggle: group by building (B3 / B4 / B5 / Admin / Outdoor) so a tech clears one building per trip instead of zig-zagging. Building derives from the location prefix. |
+| **Aging & SLA chips on every card** | Reuse AdminView's `getTimeOpen` (green <24h / amber 24–48h / red >48h + ⚠). Default sort: priority desc, then **oldest first** — a work queue surfaces what's been waiting longest, not what just arrived. Fix the dead sort dropdown while at it. |
+| **Real status flow** | `open → assigned → in_progress → resolved`, plus `duplicate` and `cancelled`. "Start" sets assignedToUid/assignedToName(displayName)/startedAt; "Mark Done" no longer asks the signed-in tech to type their own name. Reporter gets a notification on resolve (§7b promise, finally honored). Reopen-within-7-days button on resolved tickets. |
+| **Ticket timeline** | Detail modal shows created → claimed → started → resolved with timestamps, photos, and a notes thread (array of `{byUid, byName, text, at}`) replacing the single overwritten `adminNotes` string. |
+| **Schedules that work** | Fix Start-Immediately (write `nextRun = now`); show computed next due everywhere; "creates N tickets across M locations" preview before saving; per-schedule history (last 5 runs from audit_log). |
+| **Supervisor mini-dashboard** | For maintenance lead/admin: open-by-building heatmap, repeat-offender locations (B5 G2B appearing 5× this week is a signal to deep-clean, not 5 jobs), avg resolution time by category, jobs per technician this week. All computable client-side from existing data. |
+| **Identity cleanup** | Every ticket mutation stamps `updatedAt/updatedBy` + `{uid, displayName}`; technician names render from user docs, never email prefixes. |
+
+### Build order
+
+1. Hotfixes from 2.6.1 that overlap (sort bug, name bug, audit stamps, resolve notification) — 1–2 days
+2. Submit form V2 (categories, duplicate guard, severity hints, confirmation) — 3–4 days
+3. Queue V2 (tabs, claim, dedup-merge, walk-order, timeline) — 1 week
+4. Schedules fix + supervisor dashboard — 2–3 days
+
+**Out of scope for V2:** asset register/QR codes (Phase 5 #8), offline PWA drafts (Phase 3), parts inventory, vendor management.
 
 ---
 
