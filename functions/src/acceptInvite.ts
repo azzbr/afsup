@@ -111,6 +111,9 @@ export const acceptInvite = onCall<AcceptInviteRequest, Promise<AcceptInviteResp
       action: "user.acceptedInvite",
       targetType: "user",
       targetId: invite.uid,
+      // Mirrors inviteUser: entries about admin-tier users (including the
+      // role in metadata) are super_admin-only (CLAUDE.md section 6).
+      targetAdminTier: invite.role === "admin" || invite.role === "super_admin",
       metadata: { role: invite.role },
     });
 

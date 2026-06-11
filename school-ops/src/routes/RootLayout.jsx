@@ -15,7 +15,7 @@ import { Loader2 } from 'lucide-react';
 import { db } from '../firebase';
 import { initializeAuth, onAuthStateChange, signOutUser } from '../auth';
 import { ROLES } from '../constants';
-import { actorFrom } from '../permissions';
+import { actorFrom, isAdminTierRole } from '../permissions';
 import { queryClient } from '../data/queryClient';
 
 import Layout from '../Layout';
@@ -102,9 +102,10 @@ export default function RootLayout() {
             const data = snap.data();
             // Blocked/suspended users are ALWAYS signed out, regardless of
             // role — an admin must not bypass a block. Other non-approved
-            // statuses (invited/pending) keep the legacy admin exemption.
+            // statuses (invited/pending) keep the legacy exemption for the
+            // whole admin tier (admin + super_admin).
             const isBlockedOrSuspended = data.status === 'blocked' || data.status === 'suspended';
-            if (isBlockedOrSuspended || (data.status !== 'approved' && data.role !== 'admin')) {
+            if (isBlockedOrSuspended || (data.status !== 'approved' && !isAdminTierRole(data.role))) {
               await signOutUser();
               queryClient.clear();
               setUser(null);

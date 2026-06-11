@@ -51,6 +51,12 @@ async function loadTargetUser(uid: string): Promise<{ uid: string; role: Role; e
   return { uid, role: data.role, email: data.email };
 }
 
+/** Audit-log scoping (CLAUDE.md section 6): entries about admin-tier users
+ * are visible to super_admin only. */
+function isAdminTier(role: Role | undefined): boolean {
+  return role === "admin" || role === "super_admin";
+}
+
 function requireString(v: unknown, field: string): string {
   if (typeof v !== "string" || !v.trim()) {
     throw new HttpsError("invalid-argument", `Missing or invalid field: ${field}`);
@@ -142,6 +148,7 @@ export const deleteUser = onCall<{ uid: string }>(
       action: "user.deleted",
       targetType: "user",
       targetId: targetUid,
+      targetAdminTier: isAdminTier(target.role),
       before,
       after: null,
     });
@@ -218,6 +225,9 @@ export const updateUserRole = onCall<{ uid: string; role: Role }>(
       action: "user.roleChanged",
       targetType: "user",
       targetId: targetUid,
+      // Admin-tier on EITHER side of the change (promotion into or demotion
+      // out of the tier) keeps the entry super_admin-only.
+      targetAdminTier: isAdminTier(target.role) || isAdminTier(newRole),
       before,
       after: { role: newRole },
     });
@@ -269,9 +279,13 @@ export const updateUserStatus = onCall<{ uid: string; status: Status }>(
       return { ok: true, uid: targetUid, status: newStatus, changed: false };
     }
 
+    // Any transition away from "approved" removes the target from the
+    // active-super_admin count (countActiveSuperAdmins matches
+    // status == "approved" only), so the guard must fire for ALL of them —
+    // not just suspended/blocked (2026-06-10 review finding).
     if (
       target.role === "super_admin" &&
-      (newStatus === "suspended" || newStatus === "blocked") &&
+      newStatus !== "approved" &&
       (await countActiveSuperAdmins()) <= 1
     ) {
       throw new HttpsError(
@@ -305,6 +319,7 @@ export const updateUserStatus = onCall<{ uid: string; status: Status }>(
       action: "user.statusChanged",
       targetType: "user",
       targetId: targetUid,
+      targetAdminTier: isAdminTier(target.role),
       before: { status: beforeStatus ?? null },
       after: { status: newStatus },
     });

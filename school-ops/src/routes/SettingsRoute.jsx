@@ -146,6 +146,11 @@ export default function SettingsRoute() {
   const removeHoliday = (idx) =>
     patch({ publicHolidays: draft.publicHolidays.filter((_, i) => i !== idx) });
 
+  // updateSchoolSettings rejects any holiday entry without a label, which
+  // would fail the WHOLE save — so a dated row with a blank label blocks
+  // saving instead of being silently dropped.
+  const holidaysInvalid = draft.publicHolidays.some((h) => h.date && !h.label.trim());
+
   const addEmail = () => {
     const v = emailInput.trim().toLowerCase();
     if (!v || !v.includes('@') || draft.notifyOnCriticalCompliance.includes(v)) return;
@@ -178,8 +183,11 @@ export default function SettingsRoute() {
           payload.weeklyOffDays = weeklyOffDays;
           break;
         case 'publicHolidays':
+          // The callable requires date AND label on every entry; rows with
+          // neither (blank placeholders) are dropped, dated-but-unlabelled
+          // rows are caught by the holidaysInvalid guard before save.
           payload.publicHolidays = draft.publicHolidays
-            .filter((h) => h.date)
+            .filter((h) => h.date && h.label.trim())
             .map((h) => ({ date: h.date, label: h.label.trim() }));
           break;
         case 'defaultAnnualLeaveDays':
@@ -222,6 +230,10 @@ export default function SettingsRoute() {
 
   const handleSave = async () => {
     if (!isDirty || saving) return;
+    if (holidaysInvalid) {
+      setSaveMsg({ type: 'error', text: 'Fix the Public Holidays section before saving.' });
+      return;
+    }
     const payload = buildPayload();
     if (Object.keys(payload).length === 0) {
       // Every changed key was a cleared date — nothing the callable accepts.
@@ -402,6 +414,11 @@ export default function SettingsRoute() {
               </div>
             ))}
           </div>
+          {holidaysInvalid && (
+            <p className="mt-2 text-sm font-medium text-red-600">
+              Every holiday with a date also needs a name — fill in or remove the unnamed rows to save.
+            </p>
+          )}
           {canEdit && (
             <button
               type="button"

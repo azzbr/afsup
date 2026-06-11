@@ -44,8 +44,7 @@ User-facing model:
 - **Hardcoded super-admin email** in [auth.js:58](school-ops/src/auth.js:58) — remove after the Head Admin bootstrap is confirmed (along with the one-shot banner in Layout.jsx).
 - **`APP_BASE_URL` functions param still defaults to the stale `afsup-3ff9b.web.app`** — must be set to the production Netlify URL before email links are trustworthy ([functions/src/config.ts](functions/src/config.ts)).
 - **`UserProfile.jsx` is still a ~1700-line manual form** — React Hook Form + Zod refactor pending (Phase 2 leftover).
-- **No Firestore emulator tests for rules** — the permissions unit suite exists (77 tests) but rules changes are still verified by hand.
-- **No audit-log reader UI** — every Cloud Function writes entries but there is no screen to browse them yet.
+- **No Firestore emulator tests for rules** — the permissions unit suite exists (98 tests) but rules changes are still verified by hand.
 
 ---
 
@@ -186,10 +185,11 @@ Existing schema is fine — **but no code runs them yet.** Phase 4 adds a Cloud 
 |---|---|
 | `actorUid` | string |
 | `action` | `'user.approved'`, `'user.invited'`, `'ticket.escalated'`, `'salary.updated'`, `'settings.updated'`, `'role.promoted'`, etc. |
-| `targetType` | `'user' \| 'ticket' \| 'leave_request' \| 'scheduled_task' \| 'school_settings'` |
+| `targetType` | `'user' \| 'ticket' \| 'leave_request' \| 'scheduled_task' \| 'school_settings' \| 'invitation'` |
 | `targetId` | string |
 | `before`, `after` | object (diff) |
 | `at` | Timestamp |
+| `targetAdminTier` | boolean — true when the entry concerns an admin/super_admin user. Always written (default false). HR/admin may only list entries where it is `false`; super_admin reads everything (§6). Entries from before 2026-06-11 lack the field and are therefore super_admin-only. |
 
 ### `school_settings/{singleton}` (Phase 2.6, Head Admin only — live 2026-06-10)
 
@@ -450,8 +450,8 @@ These apply to **all new code**. Refactor existing code to match as Phase 1 prog
 - [x] Cloud Functions `updateUserRole`/`updateUserStatus`/`deleteUser` — server-side matrix enforcement
 - [x] Last-super-admin guard in all three mutation CFs + client-side disable
 - [x] UI label: `super_admin` renders as **"Head Admin"** (indigo-700) everywhere
-- [ ] Audit log reader UI + filter: HR/admin see entries about non-admins; super_admin sees all
-- [x] Tests: permissions module (77 passing). [ ] Emulator tests for role-elevation attempts — still open
+- [x] Audit log reader UI + filter (`/audit-log`, 2026-06-11): HR/admin see entries about non-admins (`targetAdminTier == false`, rules-enforced + composite index); super_admin sees all
+- [x] Tests: permissions module (98 passing). [ ] Emulator tests for role-elevation attempts — still open
 - [ ] Impersonation ("log in as") — deferred, needs its own design pass
 
 ### Phase 3 — Unification & polish

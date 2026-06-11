@@ -40,6 +40,7 @@ Phases 2.6 → 5 below take us there.
 | 2.6.1 — Audit hotfixes | ✅ Done (2026-06-10) | Every critical/high/medium item shipped — see checklist below. |
 | 2.7 — Multi-type leave | ◐ Started | Constants + balance lib exist; `decideLeaveRequest` CF (delivered with 2.6.1) already debits per-type balances. Remaining: per-type submission UI polish, annual reset CF, tier preview. |
 | 2.8 — Maintenance V2 | ✅ Done (2026-06-10) | Form V2, Queue V2, schedules fix, status-change CF, supervisor Insights, `cancelled` status, notes thread all shipped. |
+| 2.9 — HR Manager Toolkit | ✅ Done (2026-06-11) | Reports Center (12 reports, previews, print views, salary gate), `/audit-log` reader with `targetAdminTier` scoping, HR doc upload on employee profiles, all leftover low-severity fixes. 98 tests passing. |
 | 3 — Unification & polish | ⏳ Queued | Profile-merged-with-tickets view, PWA, Sentry. |
 | 4 — Automation | ◐ Started | dailyComplianceScan + runScheduledTasks exist. SLA escalation + event notifications remain. |
 | 5+ — Differentiators | 🆕 Planning | Sharpened by competitor research (see §Appendix A). |
@@ -169,6 +170,42 @@ A line-by-line read of every source file found bugs that block real users today.
 - No separate `assigned` status — Claim = Start (`open → in_progress`); a small team doesn't need the extra state. Revisit if the team grows.
 
 **Out of scope for V2:** asset register/QR codes (Phase 5 #8), offline PWA drafts (Phase 3), parts inventory, vendor management.
+
+---
+
+## Phase 2.9 — HR Manager Toolkit (2026-06-11) — ✅ shipped same day
+
+**Goal:** give the HR manager every report and tool needed to run the month without spreadsheets, plus fix the leftover low-severity audit findings.
+
+**Status:** everything below shipped 2026-06-11 (all 8 reports + Reports Center UI with previews/print/salary gate, `/audit-log` reader end-to-end incl. rules + composite index, HR upload-on-behalf, all 5 carried-over fixes). Adversarial review applied 3 further fixes: `acceptInvite` audit entries now flag admin-tier targets, `audit.read` excludes legacy `viewAll` actors (matching rules), and on-screen previews render en-GB dates while CSVs keep ISO. Note: the audit-log reader needs the new composite index — deploy `firestore:indexes` together with rules/functions.
+
+### 2.9a — Reports Center (HRReports tab revamp)
+
+Existing reports stay (GOSI, WPS LMRA, Expiry Watchlist, EOSG). New generators in `hr/reports.ts`, each with a `*Rows()` (header + rows, for on-screen preview/print) and a `*Report()` (CSV download) export:
+
+| Report | What it answers | Notes |
+|---|---|---|
+| **Staff Master** | "Give me everything about everyone" | All identity/contact/employment/teacher fields; salary columns only when the actor passes `user.edit.salary` (toggle in UI) |
+| **Headcount & Demographics** | Monthly management report | Counts by department, role, nationality (+ **Bahrainization %** for LMRA quota), gender, contract type, age bands, average tenure |
+| **Leave Balances & Utilization** | "Who has leave left?" | Per employee per type: entitled / used / remaining from `resolveBalances`; flags exhausted balances |
+| **Payroll Summary** | Monthly payroll cost | Basic + allowances = gross, GOSI employee deduction, net pay, employer GOSI, total cost; grand totals |
+| **MOE Teacher Roster** | MOE inspection one-click answer (Phase 5 #7 delivered early) | EN+AR names, CPR, subjects, grades, MOE approval + expiry, license, experience; printable |
+| **Data Completeness** | "Whose file is missing what?" | Missing IBAN / Arabic name / CPR / passport / RP / emergency contact / DOB / contract fields / documents, completeness % sorted worst-first |
+| **Joiners & Leavers** | GOSI/LMRA monthly reconciliation | Date-range filter; joined (dateOfJoining) and separated (separationDate + reason) |
+| **Emergency Contact Sheet** | Crisis preparedness | Per staff: local emergency contact + home-country contact for expats; printable |
+
+UI: categorized sections (Government & Compliance / People / Money / Movements & Leave), per-card row-count stats, **Preview** (first 10 rows in a modal), CSV download, **Print view** for MOE Roster + Emergency Sheet (`@media print`), salary-columns toggle gated by `can()`.
+
+### 2.9b — Audit log reader
+
+- `audit_log` entries gain `targetAdminTier: boolean` (always written; true when the entry's target user is admin/super_admin). `targetType` union gains `school_settings`.
+- Rules: super_admin reads all; HR/admin read only `targetAdminTier == false` (matrix §6). Old entries lack the field → visible to super_admin only (safe default).
+- Composite index `(targetAdminTier ASC, at DESC)`; `useAuditLog(actor)` hook; `/audit-log` route (RequireAction `audit.read`) with action/targetType filters, expandable before/after diff, load-more; nav entries desktop + mobile.
+
+### 2.9c — HR tools & fixes
+
+- **HR document upload on behalf of an employee** in EmployeeDetailView's Documents tab (storage rules already allow HR/admin writes to any `hr-documents/{uid}/` folder; there was just no UI).
+- Leftover low-severity fixes from the 2026-06-10 review: Settings holiday row with blank label poisons the save; RootLayout role-string literal + super_admin pending/invited inversion; `updateUserStatus` last-Head-Admin guard fires on any transition away from `approved`; dead `ticket.note.add` permission action removed; `handleDocUpload` audit stamps.
 
 ---
 

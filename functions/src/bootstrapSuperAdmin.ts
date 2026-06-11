@@ -135,6 +135,8 @@ export const bootstrapSuperAdmin = onCall<BootstrapRequest, Promise<BootstrapRes
       action: "user.promotedToSuperAdmin",
       targetType: "user",
       targetId: targetUid,
+      // The target becomes super_admin — always admin-tier.
+      targetAdminTier: true,
       before: { role: beforeRole },
       after: { role: "super_admin" },
       metadata: {

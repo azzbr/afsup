@@ -776,7 +776,7 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
 
       {/* REPORTS VIEW */}
       {activeView === 'reports' && (
-        <HRReports employees={employees} />
+        <HRReports employees={employees} actor={actor} />
       )}
 
       {/* EMPLOYEE DETAIL VIEW */}

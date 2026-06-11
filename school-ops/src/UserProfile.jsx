@@ -1727,7 +1727,7 @@ const DocumentVault = ({ user }) => {
       setLoading(true);
       await updateDoc(doc(db, 'users', user.uid), {
         [`documents.${docType}`]: url,
-        updatedAt: new Date()
+        ...auditUpdate(user.uid)
       });
       // Update local state
       setDocuments(prev => ({ ...prev, [docType]: url }));

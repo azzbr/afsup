@@ -51,6 +51,8 @@ export const onTicketStatusChange = onDocumentUpdated(
       action: "ticket.statusChanged",
       targetType: "ticket",
       targetId: ticketId,
+      // Tickets are never admin-tier targets — HR/admin readable.
+      targetAdminTier: false,
       before: { status: before.status ?? null },
       after: { status: after.status ?? null },
       metadata: {

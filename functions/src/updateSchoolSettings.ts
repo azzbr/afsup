@@ -11,7 +11,7 @@ import { logger } from "firebase-functions/v2";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { db } from "./admin";
-import { writeAudit, type AuditEntry } from "./audit";
+import { writeAudit } from "./audit";
 import { loadActor } from "./userMutations";
 
 const SETTINGS_DOC = "school_settings/current";
@@ -222,10 +222,10 @@ export const updateSchoolSettings = onCall<Record<string, unknown>>(
     await writeAudit({
       actorUid: callerUid,
       action: "settings.updated",
-      // audit.ts's targetType union predates school_settings (CLAUDE.md
-      // section 5 includes it); cast until the shared type catches up.
-      targetType: "school_settings" as unknown as AuditEntry["targetType"],
+      targetType: "school_settings",
       targetId: "current",
+      // Settings entries concern the school, not a user — HR/admin readable.
+      targetAdminTier: false,
       before,
       after: updates,
     });

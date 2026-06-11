@@ -11,8 +11,17 @@
 // should review against the latest LMRA/GOSI templates before submitting.
 // Refining to portal-exact formats is a separate task.
 
+import {
+  CONTRACT_TYPE_LABELS,
+  DEPARTMENT_LABELS,
+  LEAVE_TYPES,
+  LEAVE_TYPE_LABELS,
+  MOE_APPROVAL_LABELS,
+  ROLE_LABELS,
+} from "../constants";
 import type { User } from "../types";
 import { computeEOSG, totalLiability } from "./eosg";
+import { remainingDays, resolveBalances } from "./leave";
 
 // ============================================================================
 // CSV helpers
@@ -31,10 +40,22 @@ export function toCSV(rows: (string | number | null | undefined)[][]): string {
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
 
+// Date cells: CSV downloads keep ISO yyyy-mm-dd (Excel-friendly, sortable);
+// the on-screen preview/print tables use the project-wide en-GB display
+// format. Date fields are stored as UTC midnight, so both yield the intended
+// calendar date.
 function fmtDate(d: Date | null | undefined): string {
   if (!(d instanceof Date)) return "";
   return d.toISOString().split("T")[0];
 }
+
+function fmtDateDisplay(d: Date | null | undefined): string {
+  if (!(d instanceof Date)) return "";
+  return d.toLocaleDateString("en-GB");
+}
+
+/** Date-cell formatter: *Rows() default to fmtDateDisplay; CSV wrappers pass fmtDate. */
+type DateFormat = typeof fmtDate;
 
 function fmtMoney(n: number): string {
   return n.toFixed(3); // BHD has 3 decimal places (fils)
@@ -62,6 +83,55 @@ export function csvReport(name: string, content: string): GeneratedReport {
     content,
     mime: "text/csv;charset=utf-8;",
   };
+}
+
+// Header + rows pair so the Reports UI can preview/print a report on screen
+// without re-parsing the CSV. Every *Report() below is a thin CSV wrapper
+// around the matching *Rows() builder.
+export interface ReportTable {
+  header: string[];
+  rows: (string | number)[][];
+}
+
+function tableCSV(table: ReportTable): string {
+  return toCSV([table.header, ...table.rows]);
+}
+
+// ----------------------------------------------------------------------------
+// Shared row-builder helpers
+// ----------------------------------------------------------------------------
+
+function fullName(u: User): string {
+  return u.displayName || `${u.firstName || ""} ${u.lastName || ""}`.trim() || u.email || "";
+}
+
+function deptLabel(u: User): string {
+  return u.department ? DEPARTMENT_LABELS[u.department] || u.department : "";
+}
+
+function contractLabel(u: User): string {
+  return u.contractType ? CONTRACT_TYPE_LABELS[u.contractType] || u.contractType : "";
+}
+
+const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000; // averaged for leap years
+
+/** Fractional years from `d` to now, or null when the date is missing. */
+function yearsSince(d: Date | null | undefined): number | null {
+  if (!(d instanceof Date)) return null;
+  return Math.max(0, (Date.now() - d.getTime()) / YEAR_MS);
+}
+
+function joinList(values: string[] | undefined): string {
+  return (values || []).join("; ");
+}
+
+function isApproved(u: User): boolean {
+  return u.status === "approved";
+}
+
+/** Same BH-prefix check the WPS export uses to decide an IBAN is payable. */
+function hasBahrainIban(u: User): boolean {
+  return !!u.iban && u.iban.startsWith("BH");
 }
 
 // ============================================================================
@@ -370,6 +440,548 @@ export function eosgLiabilityReport(users: User[]): GeneratedReport {
   ]);
 
   return csvReport("eosg_liability", toCSV(rows));
+}
+
+// ============================================================================
+// 5. Staff Master — one row per employee, every identity/employment field.
+//
+// Salary columns are appended only when opts.includeSalary is set. The UI
+// gates that toggle behind can(actor, "user.edit.salary"); this library just
+// obeys the flag.
+// ============================================================================
+
+export function staffMasterRows(
+  users: User[],
+  opts?: { includeSalary?: boolean; dates?: DateFormat },
+): ReportTable {
+  const date = opts?.dates ?? fmtDateDisplay;
+  const header = [
+    "Employee Number",
+    "Name",
+    "Arabic Name",
+    "Email",
+    "Personal Email",
+    "Phone",
+    "Role",
+    "Department",
+    "Position",
+    "Contract Type",
+    "Contract Start",
+    "Contract End",
+    "Date of Joining",
+    "Tenure (Years)",
+    "Status",
+    "Nationality",
+    "Gender",
+    "Date of Birth",
+    "Marital Status",
+    "CPR Number",
+    "CPR Expiry",
+    "Passport Number",
+    "Passport Expiry",
+    "RP Number",
+    "RP Expiry",
+    "IBAN",
+    "Bank",
+    "Emergency Contact",
+    "Emergency Phone",
+    "Teacher",
+    "Subjects",
+    "Grades Taught",
+  ];
+  if (opts?.includeSalary) {
+    header.push("Basic Salary", "Housing Allowance", "Transport Allowance", "Phone Allowance", "Gross");
+  }
+
+  const rows: (string | number)[][] = [];
+  for (const u of users) {
+    const isBahraini = u.nationality === "Bahraini";
+    const tenure = yearsSince(u.dateOfJoining);
+    const row: (string | number)[] = [
+      u.employeeNumber || "",
+      fullName(u),
+      u.arabicName || "",
+      u.email || "",
+      u.personalEmail || "",
+      u.phoneNumber || "",
+      ROLE_LABELS[u.role] || u.role || "",
+      deptLabel(u),
+      u.position || "",
+      contractLabel(u),
+      date(u.contractStartDate),
+      date(u.contractEndDate),
+      date(u.dateOfJoining),
+      tenure === null ? "" : tenure.toFixed(1),
+      u.status || "",
+      u.nationality || "",
+      u.gender || "",
+      date(u.dateOfBirth),
+      u.maritalStatus || "",
+      u.cprNumber || "",
+      date(u.cprExpiry),
+      u.passportNumber || "",
+      date(u.passportExpiry),
+      isBahraini ? "" : u.residencePermitNumber || "",
+      isBahraini ? "" : date(u.residencePermitExpiry),
+      u.iban || "",
+      u.bankName || "",
+      u.emergencyContactName || "",
+      u.emergencyContactPhone || "",
+      u.isTeacher ? "Yes" : "",
+      joinList(u.subjects),
+      joinList(u.gradesTaught),
+    ];
+    if (opts?.includeSalary) {
+      const basic = num(u.basicSalary);
+      const housing = num(u.housingAllowance);
+      const transport = num(u.transportAllowance);
+      const phone = num(u.phoneAllowance);
+      row.push(
+        fmtMoney(basic),
+        fmtMoney(housing),
+        fmtMoney(transport),
+        fmtMoney(phone),
+        fmtMoney(basic + housing + transport + phone),
+      );
+    }
+    rows.push(row);
+  }
+
+  return { header, rows };
+}
+
+export function staffMasterReport(users: User[], opts?: { includeSalary?: boolean }): GeneratedReport {
+  return csvReport("staff_master", tableCSV(staffMasterRows(users, { ...opts, dates: fmtDate })));
+}
+
+// ============================================================================
+// 6. Headcount & Demographics — monthly management summary over active
+// (approved) employees, including the LMRA Bahrainization quota metric.
+// ============================================================================
+
+export function headcountRows(users: User[]): ReportTable {
+  const active = users.filter(isApproved);
+  const total = active.length;
+  const pct = (n: number) => (total > 0 ? ((n / total) * 100).toFixed(1) : "0.0");
+
+  const rows: (string | number)[][] = [["Total active headcount", "", total, pct(total)]];
+
+  const section = (metric: string, bucketOf: (u: User) => string) => {
+    const counts = new Map<string, number>();
+    for (const u of active) {
+      const bucket = bucketOf(u) || "Not set";
+      counts.set(bucket, (counts.get(bucket) || 0) + 1);
+    }
+    const entries = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    for (const [bucket, count] of entries) rows.push([metric, bucket, count, pct(count)]);
+  };
+
+  section("By department", deptLabel);
+  section("By role", (u) => ROLE_LABELS[u.role] || u.role || "");
+
+  section("By nationality", (u) => u.nationality || "");
+  const bahraini = active.filter((u) => u.nationality === "Bahraini").length;
+  rows.push(["By nationality", "Bahrainization rate", bahraini, pct(bahraini)]);
+
+  section("By gender", (u) => u.gender || "");
+  section("By contract type", contractLabel);
+  section("Teachers vs non-teachers", (u) => (u.isTeacher ? "Teachers" : "Non-teachers"));
+
+  const AGE_BANDS = ["Under 25", "25-34", "35-44", "45-54", "55+", "Unknown"];
+  const bandOf = (u: User): string => {
+    const age = yearsSince(u.dateOfBirth);
+    if (age === null) return "Unknown";
+    if (age < 25) return "Under 25";
+    if (age < 35) return "25-34";
+    if (age < 45) return "35-44";
+    if (age < 55) return "45-54";
+    return "55+";
+  };
+  const bandCounts = new Map<string, number>();
+  for (const u of active) {
+    const band = bandOf(u);
+    bandCounts.set(band, (bandCounts.get(band) || 0) + 1);
+  }
+  for (const band of AGE_BANDS) {
+    const count = bandCounts.get(band) || 0;
+    if (count > 0) rows.push(["By age band", band, count, pct(count)]);
+  }
+
+  const tenures = active
+    .map((u) => yearsSince(u.dateOfJoining))
+    .filter((t): t is number => t !== null);
+  const avgTenure = tenures.length > 0 ? tenures.reduce((s, t) => s + t, 0) / tenures.length : 0;
+  rows.push(["Average tenure (years)", "", avgTenure.toFixed(1), ""]);
+
+  return { header: ["Metric", "Breakdown", "Count", "Share %"], rows };
+}
+
+export function headcountReport(users: User[]): GeneratedReport {
+  return csvReport("headcount_demographics", tableCSV(headcountRows(users)));
+}
+
+// ============================================================================
+// 7. Leave Balances & Utilization — per approved employee per leave type.
+//
+// Annual and sick always appear; other types only when there is activity
+// (nonzero entitlement or usage). Balances resolve through hr/leave so legacy
+// annualLeaveBalance / sickDaysUsed fields keep working.
+// ============================================================================
+
+export function leaveBalancesRows(users: User[]): ReportTable {
+  const rows: (string | number)[][] = [];
+
+  for (const u of users.filter(isApproved)) {
+    const balances = resolveBalances(u);
+    for (const type of LEAVE_TYPES) {
+      const balance = balances[type];
+      const alwaysShown = type === "annual" || type === "sick";
+      if (!alwaysShown && balance.entitled <= 0 && balance.used <= 0) continue;
+
+      const remaining = remainingDays(balance);
+      let flag = "";
+      if (remaining <= 0) flag = "EXHAUSTED";
+      else if (type === "annual" && remaining <= 2) flag = "LOW";
+
+      rows.push([
+        fullName(u),
+        deptLabel(u),
+        LEAVE_TYPE_LABELS[type],
+        balance.entitled,
+        balance.used,
+        remaining,
+        flag,
+      ]);
+    }
+  }
+
+  return {
+    header: ["Employee", "Department", "Leave Type", "Entitled", "Used", "Remaining", "Flag"],
+    rows,
+  };
+}
+
+export function leaveBalancesReport(users: User[]): GeneratedReport {
+  return csvReport("leave_balances", tableCSV(leaveBalancesRows(users)));
+}
+
+// ============================================================================
+// 8. Payroll Summary — monthly payroll cost per approved employee with a
+// basic salary, including GOSI both ways and a grand totals row.
+// ============================================================================
+
+export function payrollSummaryRows(users: User[], gosi: GosiRates = DEFAULT_GOSI_RATES): ReportTable {
+  const payable = users.filter((u) => isApproved(u) && num(u.basicSalary) > 0);
+
+  const rows: (string | number)[][] = [];
+  let tBasic = 0;
+  let tHousing = 0;
+  let tTransport = 0;
+  let tPhone = 0;
+  let tGross = 0;
+  let tEmployee = 0;
+  let tNet = 0;
+  let tEmployer = 0;
+  let tCost = 0;
+
+  for (const u of payable) {
+    const basic = num(u.basicSalary);
+    const housing = num(u.housingAllowance);
+    const transport = num(u.transportAllowance);
+    const phone = num(u.phoneAllowance);
+    const gross = basic + housing + transport + phone;
+    const isBahraini = u.nationality === "Bahraini";
+    const rates = isBahraini ? gosi.bahraini : gosi.expat;
+    const employeeGosi = basic * rates.employeeRate;
+    const employerGosi = basic * rates.employerRate;
+    const net = gross - employeeGosi;
+    const cost = gross + employerGosi;
+
+    tBasic += basic;
+    tHousing += housing;
+    tTransport += transport;
+    tPhone += phone;
+    tGross += gross;
+    tEmployee += employeeGosi;
+    tNet += net;
+    tEmployer += employerGosi;
+    tCost += cost;
+
+    rows.push([
+      fullName(u),
+      deptLabel(u),
+      isBahraini ? "Bahraini" : "Expat",
+      fmtMoney(basic),
+      fmtMoney(housing),
+      fmtMoney(transport),
+      fmtMoney(phone),
+      fmtMoney(gross),
+      fmtMoney(employeeGosi),
+      fmtMoney(net),
+      fmtMoney(employerGosi),
+      fmtMoney(cost),
+    ]);
+  }
+
+  rows.push([
+    "TOTAL",
+    "",
+    "",
+    fmtMoney(tBasic),
+    fmtMoney(tHousing),
+    fmtMoney(tTransport),
+    fmtMoney(tPhone),
+    fmtMoney(tGross),
+    fmtMoney(tEmployee),
+    fmtMoney(tNet),
+    fmtMoney(tEmployer),
+    fmtMoney(tCost),
+  ]);
+
+  return {
+    header: [
+      "Employee",
+      "Department",
+      "Nationality Class",
+      "Basic",
+      "Housing",
+      "Transport",
+      "Phone",
+      "Gross",
+      "GOSI Employee",
+      "Net Pay",
+      "GOSI Employer",
+      "Total Monthly Cost",
+    ],
+    rows,
+  };
+}
+
+export function payrollSummaryReport(users: User[], gosi: GosiRates = DEFAULT_GOSI_RATES): GeneratedReport {
+  return csvReport("payroll_summary", tableCSV(payrollSummaryRows(users, gosi)));
+}
+
+// ============================================================================
+// 9. MOE Teacher Roster — inspection-ready list of active teachers.
+// ============================================================================
+
+export function moeTeacherRosterRows(users: User[], dates: DateFormat = fmtDateDisplay): ReportTable {
+  const teachers = users
+    .filter((u) => isApproved(u) && u.isTeacher === true)
+    .sort((a, b) => fullName(a).localeCompare(fullName(b)));
+
+  const rows: (string | number)[][] = teachers.map((u) => [
+    fullName(u),
+    u.arabicName || "",
+    u.cprNumber || "",
+    u.nationality || "",
+    joinList(u.subjects),
+    joinList(u.gradesTaught),
+    u.homeroomClass || "",
+    u.teachingLicenseNumber || "",
+    dates(u.teachingLicenseExpiry),
+    u.moeApprovalStatus ? MOE_APPROVAL_LABELS[u.moeApprovalStatus] || u.moeApprovalStatus : "",
+    dates(u.moeApprovalExpiry),
+    u.yearsExperienceTotal ?? "",
+    u.yearsAtAFS ?? "",
+  ]);
+
+  return {
+    header: [
+      "Name",
+      "Arabic Name",
+      "CPR Number",
+      "Nationality",
+      "Subjects",
+      "Grades Taught",
+      "Homeroom",
+      "License Number",
+      "License Expiry",
+      "MOE Approval",
+      "MOE Approval Expiry",
+      "Years Experience (Total)",
+      "Years at AFS",
+    ],
+    rows,
+  };
+}
+
+export function moeTeacherRosterReport(users: User[]): GeneratedReport {
+  return csvReport("moe_teacher_roster", tableCSV(moeTeacherRosterRows(users, fmtDate)));
+}
+
+// ============================================================================
+// 10. Data Completeness — whose file is missing what, sorted worst-first.
+// Conditional checks (Arabic name, RP, contract dates, MOE status) only count
+// when applicable, so the completeness % denominator varies per employee.
+// ============================================================================
+
+interface CompletenessCheck {
+  label: string;
+  ok: boolean;
+}
+
+function completenessChecks(u: User): CompletenessCheck[] {
+  const isBahraini = u.nationality === "Bahraini";
+  const checks: CompletenessCheck[] = [{ label: "IBAN", ok: hasBahrainIban(u) }];
+
+  if (isBahraini) checks.push({ label: "Arabic name", ok: !!u.arabicName });
+  checks.push(
+    { label: "CPR number", ok: !!u.cprNumber },
+    { label: "CPR expiry", ok: u.cprExpiry instanceof Date },
+    { label: "Passport number", ok: !!u.passportNumber },
+    { label: "Passport expiry", ok: u.passportExpiry instanceof Date },
+  );
+  if (!isBahraini) {
+    checks.push(
+      { label: "Residence permit number", ok: !!u.residencePermitNumber },
+      { label: "Residence permit expiry", ok: u.residencePermitExpiry instanceof Date },
+    );
+  }
+  checks.push(
+    { label: "Date of birth", ok: u.dateOfBirth instanceof Date },
+    { label: "Emergency contact name", ok: !!u.emergencyContactName },
+    { label: "Emergency contact phone", ok: !!u.emergencyContactPhone },
+    { label: "Department", ok: !!u.department },
+    { label: "Position", ok: !!u.position },
+    { label: "Date of joining", ok: u.dateOfJoining instanceof Date },
+  );
+  if (u.contractType === "fixed_term") {
+    checks.push(
+      { label: "Contract start date", ok: u.contractStartDate instanceof Date },
+      { label: "Contract end date", ok: u.contractEndDate instanceof Date },
+    );
+  }
+  if (u.isTeacher) checks.push({ label: "MOE approval status", ok: !!u.moeApprovalStatus });
+  checks.push({ label: "Uploaded documents", ok: Object.keys(u.documents || {}).length > 0 });
+
+  return checks;
+}
+
+export function dataCompletenessRows(users: User[]): ReportTable {
+  const incomplete = users
+    .filter(isApproved)
+    .map((u) => {
+      const checks = completenessChecks(u);
+      const missing = checks.filter((c) => !c.ok).map((c) => c.label);
+      const completeness = Math.round(((checks.length - missing.length) / checks.length) * 100);
+      return { u, missing, completeness };
+    })
+    .filter((it) => it.missing.length > 0)
+    .sort(
+      (a, b) =>
+        a.completeness - b.completeness ||
+        b.missing.length - a.missing.length ||
+        fullName(a.u).localeCompare(fullName(b.u)),
+    );
+
+  const rows: (string | number)[][] = incomplete.map((it) => [
+    fullName(it.u),
+    deptLabel(it.u),
+    it.missing.length,
+    it.completeness,
+    it.missing.join("; "),
+  ]);
+
+  return {
+    header: ["Employee", "Department", "Missing Count", "Completeness %", "Missing Items"],
+    rows,
+  };
+}
+
+export function dataCompletenessReport(users: User[]): GeneratedReport {
+  return csvReport("data_completeness", tableCSV(dataCompletenessRows(users)));
+}
+
+// ============================================================================
+// 11. Joiners & Leavers — GOSI/LMRA monthly reconciliation over a date range.
+// No status filter: leavers are usually suspended/blocked by the time this
+// report runs, and the date range itself scopes the output.
+// ============================================================================
+
+export function joinersLeaversRows(
+  users: User[],
+  from: Date,
+  to: Date,
+  dates: DateFormat = fmtDateDisplay,
+): ReportTable {
+  const start = new Date(from.getFullYear(), from.getMonth(), from.getDate()).getTime();
+  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999).getTime();
+  const inRange = (d: Date | null | undefined): boolean =>
+    d instanceof Date && d.getTime() >= start && d.getTime() <= end;
+
+  const byDate = (key: "dateOfJoining" | "separationDate") => (a: User, b: User) =>
+    (a[key]?.getTime() ?? 0) - (b[key]?.getTime() ?? 0);
+
+  const joiners = users.filter((u) => inRange(u.dateOfJoining)).sort(byDate("dateOfJoining"));
+  const leavers = users.filter((u) => inRange(u.separationDate)).sort(byDate("separationDate"));
+
+  const rows: (string | number)[][] = [];
+  for (const u of joiners) {
+    rows.push(["JOINED", fullName(u), deptLabel(u), u.position || "", dates(u.dateOfJoining), contractLabel(u)]);
+  }
+  rows.push(["JOINED", "TOTAL", "", "", "", joiners.length]);
+  for (const u of leavers) {
+    rows.push(["LEFT", fullName(u), deptLabel(u), u.position || "", dates(u.separationDate), u.separationReason || ""]);
+  }
+  rows.push(["LEFT", "TOTAL", "", "", "", leavers.length]);
+
+  return { header: ["Type", "Employee", "Department", "Position", "Date", "Detail"], rows };
+}
+
+export function joinersLeaversReport(users: User[], from: Date, to: Date): GeneratedReport {
+  return csvReport("joiners_leavers", tableCSV(joinersLeaversRows(users, from, to, fmtDate)));
+}
+
+// ============================================================================
+// 12. Emergency Contact Sheet — crisis-preparedness list per active employee.
+// Home-country contact columns are filled for non-Bahrainis only.
+// ============================================================================
+
+export function emergencyContactRows(users: User[]): ReportTable {
+  const active = users
+    .filter(isApproved)
+    .sort((a, b) => deptLabel(a).localeCompare(deptLabel(b)) || fullName(a).localeCompare(fullName(b)));
+
+  const rows: (string | number)[][] = active.map((u) => {
+    const showHomeCountry = u.nationality !== "Bahraini";
+    return [
+      fullName(u),
+      deptLabel(u),
+      u.position || "",
+      u.phoneNumber || "",
+      u.secondaryPhone || "",
+      u.emergencyContactName || "",
+      u.emergencyContactRelationship || "",
+      u.emergencyContactPhone || "",
+      u.emergencyContactAltPhone || "",
+      showHomeCountry ? u.homeCountryEmergency1Name || "" : "",
+      showHomeCountry ? u.homeCountryEmergency1Phone || "" : "",
+      showHomeCountry ? u.homeCountryEmergency1Relationship || "" : "",
+    ];
+  });
+
+  return {
+    header: [
+      "Employee",
+      "Department",
+      "Position",
+      "Phone",
+      "Secondary Phone",
+      "Emergency Contact",
+      "Relationship",
+      "Emergency Phone",
+      "Alt Phone",
+      "Home Country Contact",
+      "Home Country Phone",
+      "Home Country Relationship",
+    ],
+    rows,
+  };
+}
+
+export function emergencyContactReport(users: User[]): GeneratedReport {
+  return csvReport("emergency_contacts", tableCSV(emergencyContactRows(users)));
 }
 
 // ============================================================================

@@ -7,8 +7,14 @@ import { db } from "./admin";
 export interface AuditEntry {
   actorUid: string;
   action: string; // e.g. "user.invited", "user.approved"
-  targetType: "user" | "ticket" | "leave_request" | "scheduled_task" | "invitation";
+  targetType: "user" | "ticket" | "leave_request" | "scheduled_task" | "invitation" | "school_settings";
   targetId: string;
+  /**
+   * True when the entry concerns an admin-tier (admin/super_admin) user.
+   * Drives the audit-log read scope: HR/admin may only read entries where
+   * this is false; super_admin reads everything (CLAUDE.md section 6).
+   */
+  targetAdminTier?: boolean;
   /** Diff or context for the action. Avoid PII beyond what's necessary. */
   metadata?: Record<string, unknown>;
   /** Optional before/after snapshots for mutation audit (CLAUDE.md §5). */
@@ -23,6 +29,10 @@ export async function writeAudit(entry: AuditEntry): Promise<void> {
     action: entry.action,
     targetType: entry.targetType,
     targetId: entry.targetId,
+    // ALWAYS written (never undefined): the HR/admin reader queries on
+    // equality (targetAdminTier == false), and Firestore equality filters
+    // never match documents missing the field.
+    targetAdminTier: entry.targetAdminTier === true,
     at: FieldValue.serverTimestamp(),
   };
   if (entry.metadata !== undefined) doc.metadata = entry.metadata;

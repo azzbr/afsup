@@ -11,7 +11,7 @@ import { actorFrom, can, canSeeRoleView } from './permissions';
 import { ROLES, ROLE_LABELS } from './constants';
 import { queryClient } from './data/queryClient';
 import { useUnreadCount } from './data/useNotifications';
-import { LogOut, Menu, X, Users, Bell, Crown, Settings, ShieldCheck } from 'lucide-react';
+import { LogOut, Menu, X, Users, Bell, Crown, Settings, ShieldCheck, ScrollText } from 'lucide-react';
 
 import logo from './assets/LogoT.png';
 
@@ -145,7 +145,8 @@ export default function Layout({
   const canSeeDirectory = canSeeRoleView(actor, 'maintenance');
   const canReadSettings = can(actor, 'settings.read');
   const canManageAdmins = can(actor, 'user.manageAdmins');
-  const showAdministration = canReadSettings || canManageAdmins;
+  const canReadAudit = can(actor, 'audit.read');
+  const showAdministration = canReadSettings || canManageAdmins || canReadAudit;
   const roleKey = actor?.role || userData?.role;
 
   return (
@@ -234,6 +235,21 @@ export default function Layout({
                     >
                       <ShieldCheck size={16} className="inline mr-2" />
                       Admin Management
+                    </NavLink>
+                  )}
+                  {canReadAudit && (
+                    <NavLink
+                      to="/audit-log"
+                      className={({ isActive }) =>
+                        `text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full flex items-center ${
+                          isActive
+                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`
+                      }
+                    >
+                      <ScrollText size={16} className="inline mr-2" />
+                      Audit Log
                     </NavLink>
                   )}
                 </div>
@@ -403,6 +419,21 @@ export default function Layout({
                         }
                       >
                         <ShieldCheck size={16} /> Admin Management
+                      </NavLink>
+                    )}
+                    {canReadAudit && (
+                      <NavLink
+                        to="/audit-log"
+                        onClick={closeMobile}
+                        className={({ isActive }) =>
+                          `p-3 rounded-lg text-sm font-medium text-left w-full flex items-center gap-2 ${
+                            isActive
+                              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                              : 'text-slate-600 hover:bg-slate-50'
+                          }`
+                        }
+                      >
+                        <ScrollText size={16} /> Audit Log
                       </NavLink>
                     )}
                   </div>

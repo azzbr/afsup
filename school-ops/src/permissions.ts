@@ -34,6 +34,16 @@ export function actorFrom(user: Pick<User, "uid" | "role" | "status" | "viewAll"
   };
 }
 
+/**
+ * True for roles in the admin tier (admin + super_admin). Use this instead
+ * of comparing role strings in components — e.g. RootLayout's sign-out gate
+ * exempts the whole admin tier from the legacy invited/pending sign-out.
+ * Accepts raw Firestore role strings, so missing/unknown values return false.
+ */
+export function isAdminTierRole(role: string | null | undefined): boolean {
+  return role === "admin" || role === "super_admin";
+}
+
 // ============================================================================
 // ACTIONS — every permission-checked operation in the system
 // ============================================================================
@@ -47,7 +57,6 @@ export type Action =
   | "ticket.escalate"
   | "ticket.delete"
   | "ticket.cancel"
-  | "ticket.note.add"
   // Users / Profiles
   | "user.view.own"
   | "user.view.profile"
@@ -135,9 +144,6 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
     case "ticket.cancel":
       return isAdmin;
 
-    case "ticket.note.add":
-      return isAdmin || isHR;
-
     // -------------------------------------------------------------------- users
     case "user.view.own":
       return true;
@@ -223,7 +229,10 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
     // ------------------------------------------- audit / notif / settings
     case "audit.read":
       // Entries about non-admins only — see audit.readAll for the full log.
-      return isAnyManager;
+      // Real hr/admin roles only — firestore.rules audit_log read has no
+      // viewAll concept (and useAuditLog scopes by raw role), so granting
+      // it here would promise a read the rules refuse.
+      return isHR || role === "admin" || isSuperAdmin;
 
     case "audit.readAll":
       // Every entry, including those about admins and super_admins.

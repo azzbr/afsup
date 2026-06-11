@@ -2,7 +2,7 @@
 // When you add a new Action, add a test for it here.
 
 import { describe, expect, it } from "vitest";
-import { can, actorFrom, assignableRoles, canSeeRoleView, type Actor } from "../permissions";
+import { can, actorFrom, assignableRoles, canSeeRoleView, isAdminTierRole, type Actor } from "../permissions";
 
 const staff: Actor = { uid: "u-staff", role: "staff", status: "approved" };
 const maint: Actor = { uid: "u-maint", role: "maintenance", status: "approved" };
@@ -31,6 +31,23 @@ describe("actorFrom", () => {
 
   it("returns an actor for approved users", () => {
     expect(actorFrom({ uid: "x", role: "staff", status: "approved" })).toMatchObject({ uid: "x", role: "staff" });
+  });
+});
+
+describe("isAdminTierRole", () => {
+  it("is true for admin and super_admin only", () => {
+    expect(isAdminTierRole("admin")).toBe(true);
+    expect(isAdminTierRole("super_admin")).toBe(true);
+    expect(isAdminTierRole("staff")).toBe(false);
+    expect(isAdminTierRole("maintenance")).toBe(false);
+    expect(isAdminTierRole("hr")).toBe(false);
+  });
+
+  it("is false for missing or unknown roles", () => {
+    expect(isAdminTierRole(null)).toBe(false);
+    expect(isAdminTierRole(undefined)).toBe(false);
+    expect(isAdminTierRole("")).toBe(false);
+    expect(isAdminTierRole("principal")).toBe(false);
   });
 });
 
@@ -331,6 +348,10 @@ describe("can() — viewAll override", () => {
 
   it("viewAll does not grant settings.read (rules have no viewAll concept)", () => {
     expect(can(viewAll, "settings.read")).toBe(false);
+  });
+
+  it("viewAll does not grant audit.read (rules and useAuditLog scope by real role)", () => {
+    expect(can(viewAll, "audit.read")).toBe(false);
   });
 
   it("viewAll cannot see or manage super_admin targets", () => {

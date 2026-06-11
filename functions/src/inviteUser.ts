@@ -240,6 +240,7 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
       action: "user.invited",
       targetType: "user",
       targetId: newUid,
+      targetAdminTier: role === "admin" || role === "super_admin",
       metadata: { email, role, emailSent },
     });
 

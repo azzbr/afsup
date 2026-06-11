@@ -14,6 +14,7 @@ import AcceptInviteRoute from "./routes/AcceptInviteRoute";
 import NotificationsRoute from "./routes/NotificationsRoute";
 import SettingsRoute from "./routes/SettingsRoute";
 import AdminManagementRoute from "./routes/AdminManagementRoute";
+import AuditLogRoute from "./routes/AuditLogRoute";
 import { RequireAction, RequireAuth, RequireCan } from "./routes/guards";
 
 export const router = createBrowserRouter([
@@ -94,6 +95,14 @@ export const router = createBrowserRouter([
         element: (
           <RequireAction action="user.manageAdmins">
             <AdminManagementRoute />
+          </RequireAction>
+        ),
+      },
+      {
+        path: "audit-log",
+        element: (
+          <RequireAction action="audit.read">
+            <AuditLogRoute />
           </RequireAction>
         ),
       },

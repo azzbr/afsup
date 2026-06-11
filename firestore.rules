@@ -204,10 +204,14 @@ service cloud.firestore {
 
     // 6. Audit Log (Phase 1/2 — append-only history)
     //
-    // Written exclusively by Cloud Functions. HR and admins may read for
-    // forensic review. No one may update or delete.
+    // Written exclusively by Cloud Functions. super_admin reads everything;
+    // HR/admin read only entries about non-admin-tier targets
+    // (targetAdminTier == false, per the CLAUDE.md section 6 matrix).
+    // Pre-2026-06-11 entries lack the field and so remain super_admin-only
+    // (safe default). No one may update or delete.
     match /audit_log/{entry} {
-      allow read: if isAdmin() || (isVerifiedUser() && getUserRole() == 'hr');
+      allow read: if isSuperAdmin() ||
+                  ((isAdmin() || isHR()) && resource.data.targetAdminTier == false);
       allow write: if false; // Cloud Functions only.
     }
 

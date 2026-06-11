@@ -115,6 +115,11 @@ export const decideLeaveRequest = onCall<DecideLeaveRequestPayload>(
 
       const userRef = db.collection("users").doc(requesterUid);
       const userSnap = await tx.get(userRef);
+      // Requester role read inside the transaction — drives the audit
+      // entry's admin-tier scoping (rejects reuse the same doc fetch).
+      const requesterRole = String(
+        (userSnap.data() as { role?: string } | undefined)?.role ?? "",
+      );
 
       if (decision === "approved") {
         if (!userSnap.exists) {
@@ -176,6 +181,7 @@ export const decideLeaveRequest = onCall<DecideLeaveRequestPayload>(
 
       return {
         requesterUid,
+        requesterRole,
         days,
         leaveType,
         startLabel: dayName(request.leaveStart),
@@ -188,6 +194,8 @@ export const decideLeaveRequest = onCall<DecideLeaveRequestPayload>(
       action: decision === "approved" ? "leave.approved" : "leave.rejected",
       targetType: "leave_request",
       targetId: requestId,
+      targetAdminTier:
+        outcome.requesterRole === "admin" || outcome.requesterRole === "super_admin",
       before: { status: "pending" },
       after: { status: decision, days: outcome.days, leaveType: outcome.leaveType },
     });

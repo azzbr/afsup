@@ -13,11 +13,12 @@ import { USERS_KEY } from '../data/useUsers';
 import { useLeaveRequestsFor } from '../data/useLeaveRequests';
 import { complianceAlertsFor } from '../hr/compliance';
 import { resolveBalances, sickLeaveBreakdown, remainingDays } from '../hr/leave';
+import { uploadFile } from '../storage';
 import {
   User, Mail, Phone, Calendar, CreditCard, FileText, Shield,
   Briefcase, Globe, Heart, AlertTriangle, CheckCircle, Clock,
   BadgeCheck, Building2, ChevronLeft, Edit3, Save, Trash2, Lock,
-  DollarSign, Plane, Activity, Eye, Printer,
+  DollarSign, Plane, Activity, Eye, Printer, UploadCloud,
   UserCheck, UserX, Ban, RefreshCw, History
 } from 'lucide-react';
 
@@ -245,53 +246,145 @@ const LeaveHistory = ({ requests, isLoading }) => {
 // DOCUMENTS SECTION
 // ============================================================================
 
-const DocumentsSection = ({ employee, canEdit }) => {
+// Mirrors the self-upload rules in UserProfile.jsx's DocumentUpload exactly:
+// same accepted content types and the same 5MB cap enforced by
+// firebase.storage.rules (which otherwise rejects with a misleading
+// "storage/unauthorized" error).
+const DOC_ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
+const DOC_MAX_BYTES = 5 * 1024 * 1024;
+
+// Same doc-type keys as the DocumentVault in UserProfile.jsx so HR uploads
+// land in the same documents.{key} slots as self-uploads, plus the
+// HR-only Employment Contract slot this view already had.
+const DOC_TYPES = [
+  { key: 'cpr_front', label: 'CPR — Front Side', icon: CreditCard },
+  { key: 'cpr_back', label: 'CPR — Back Side', icon: CreditCard },
+  { key: 'cpr', label: 'CPR (Smart Card)', icon: CreditCard },
+  { key: 'passport', label: 'Passport Copy', icon: FileText },
+  { key: 'iban', label: 'IBAN Certificate', icon: DollarSign },
+  { key: 'cv', label: 'Curriculum Vitae (CV)', icon: FileText },
+  { key: 'degree', label: 'University Degree', icon: BadgeCheck },
+  { key: 'transcripts', label: 'Transcripts', icon: FileText },
+  { key: 'quadrabay', label: 'QuadraBay Verification', icon: Shield },
+  { key: 'moe_approval', label: 'MOE Teacher Approval', icon: Shield },
+  { key: 'contract', label: 'Employment Contract', icon: Briefcase }
+];
+
+const DocumentsSection = ({ employee, canEdit, actorUid }) => {
+  const queryClient = useQueryClient();
+  const [uploading, setUploading] = useState({});
+  const [errors, setErrors] = useState({});
+
   const documents = employee.documents || {};
-  
-  const docTypes = [
-    { key: 'passport', label: 'Passport Copy', icon: FileText },
-    { key: 'cpr', label: 'CPR (Smart Card)', icon: CreditCard },
-    { key: 'iban', label: 'IBAN Certificate', icon: DollarSign },
-    { key: 'degree', label: 'University Degree', icon: BadgeCheck },
-    { key: 'transcripts', label: 'Transcripts', icon: FileText },
-    { key: 'quadrabay', label: 'QuadraBay Verification', icon: Shield },
-    { key: 'moe_approval', label: 'MOE Teacher Approval', icon: Shield },
-    { key: 'contract', label: 'Employment Contract', icon: Briefcase }
-  ];
-  
+  const employeeUid = employee.uid || employee.id;
+
+  const setSlotError = (key, message) =>
+    setErrors(prev => ({ ...prev, [key]: message }));
+
+  const handleFileChange = async (key, e) => {
+    const file = e.target.files[0];
+    // Reset the input so picking the same file again after a failure re-fires.
+    e.target.value = '';
+    if (!file) return;
+
+    if (!DOC_ALLOWED_TYPES.includes(file.type)) {
+      setSlotError(key, 'Only PDF, JPG, and PNG files are allowed.');
+      return;
+    }
+    if (file.size > DOC_MAX_BYTES) {
+      const mb = (file.size / (1024 * 1024)).toFixed(1);
+      setSlotError(key, `File is too large (${mb} MB). Maximum allowed is 5 MB. Try a JPG (not PNG) or compress the image first.`);
+      return;
+    }
+
+    setSlotError(key, null);
+    setUploading(prev => ({ ...prev, [key]: true }));
+    try {
+      // Same path convention as the self-upload: hr-documents/UID/TYPE_TS.ext
+      const ext = file.name.split('.').pop();
+      const path = `hr-documents/${employeeUid}/${key}_${Date.now()}.${ext}`;
+      const result = await uploadFile(file, path);
+
+      if (!result.success) {
+        // Translate the misleading storage/unauthorized into something useful.
+        const raw = String(result.error || '');
+        setSlotError(key, raw.includes('unauthorized')
+          ? 'Upload rejected. Check that the file is under 5 MB and is a JPG, PNG, or PDF. If it still fails, sign out and back in.'
+          : 'Upload failed: ' + raw);
+        return;
+      }
+
+      await updateDoc(doc(db, 'users', employeeUid), {
+        [`documents.${key}`]: result.downloadURL,
+        ...auditUpdate(actorUid)
+      });
+      queryClient.invalidateQueries({ queryKey: USERS_KEY });
+    } catch (error) {
+      console.error('Document upload failed:', error);
+      setSlotError(key, 'Could not save document: ' + error.message);
+    } finally {
+      setUploading(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      {docTypes.map(({ key, label, icon: Icon }) => {
+      {DOC_TYPES.map(({ key, label, icon: Icon }) => {
         const url = documents[key];
         const hasDoc = !!url;
-        
+        const isUploading = !!uploading[key];
+        const error = errors[key];
+
         return (
           <div
             key={key}
-            className={`flex items-center justify-between p-4 rounded-xl border transition-colors
+            className={`p-4 rounded-xl border transition-colors
               ${hasDoc ? 'bg-emerald-50 border-emerald-100' : 'bg-slate-50 border-slate-100'}`}
           >
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-lg ${hasDoc ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-200 text-slate-400'}`}>
-                <Icon size={18} />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${hasDoc ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-200 text-slate-400'}`}>
+                  <Icon size={18} />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-slate-700">{label}</p>
+                  <p className={`text-xs ${hasDoc ? 'text-emerald-600' : 'text-slate-400'}`}>
+                    {hasDoc ? 'Uploaded' : 'Not uploaded'}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-medium text-slate-700">{label}</p>
-                <p className={`text-xs ${hasDoc ? 'text-emerald-600' : 'text-slate-400'}`}>
-                  {hasDoc ? 'Uploaded' : 'Not uploaded'}
-                </p>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {hasDoc && (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="View Document"
+                    className="p-2 bg-white border border-slate-200 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                  >
+                    <Eye size={16} />
+                  </a>
+                )}
+                {canEdit && (
+                  <label
+                    className={`cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+                      ${isUploading ? 'bg-slate-100 text-slate-400 cursor-wait' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
+                  >
+                    {isUploading ? 'Uploading...' : <><UploadCloud size={14} /> {hasDoc ? 'Replace' : 'Upload'}</>}
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept=".pdf,.jpg,.jpeg,.png"
+                      disabled={isUploading}
+                      onChange={e => handleFileChange(key, e)}
+                    />
+                  </label>
+                )}
               </div>
             </div>
-            
-            {hasDoc && (
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="p-2 bg-white border border-slate-200 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-              >
-                <Eye size={16} />
-              </a>
+            {error && (
+              <p className="mt-2 text-xs font-medium text-red-600">{error}</p>
             )}
           </div>
         );
@@ -864,7 +957,7 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
         {activeTab === 'documents' && (
           <div>
             <SectionHeader icon={FileText} title="HR Documents" subtitle="Official documentation and certificates" />
-            <DocumentsSection employee={employee} canEdit={canEdit} />
+            <DocumentsSection employee={employee} canEdit={canEdit} actorUid={user?.uid} />
           </div>
         )}
         
