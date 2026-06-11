@@ -52,15 +52,13 @@ const DEFAULT_ENTITLEMENTS: Record<string, number> = {
   unpaid: 0,
 };
 
+// Phase 2.9.1 HR privacy lockdown: leave decisions are people data, owned by
+// hr and super_admin only. Plain admin is out, and the legacy viewAll flag
+// must never grant HR data access.
 function canDecideLeave(actor: ActorDoc | null): boolean {
   if (!actor) return false;
   if (actor.status === "blocked" || actor.status === "suspended") return false;
-  return (
-    actor.role === "hr" ||
-    actor.role === "admin" ||
-    actor.role === "super_admin" ||
-    actor.viewAll === true
-  );
+  return actor.role === "hr" || actor.role === "super_admin";
 }
 
 function dayName(ts: Timestamp | null | undefined): string | null {
@@ -86,7 +84,7 @@ export const decideLeaveRequest = onCall<DecideLeaveRequestPayload>(
 
     const actor = await loadActor(callerUid);
     if (!canDecideLeave(actor)) {
-      throw new HttpsError("permission-denied", "Only HR or admin can decide leave requests.");
+      throw new HttpsError("permission-denied", "Only HR or the Head Admin can decide leave requests.");
     }
 
     const requestRef = db.collection("leave_requests").doc(requestId);

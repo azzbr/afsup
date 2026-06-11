@@ -28,14 +28,15 @@ service firebase.storage {
     // --- HR DOCUMENTS (SECURE VAULT) ---
     // Structure: hr-documents/{userId}/{filename}
     //
-    // Mirrors the role matrix in CLAUDE.md §6: HR and admin can read AND
-    // write any HR document (so HR can attach a new hire's CV during
-    // onboarding, etc.). Regular users can only access their own folder.
+    // Mirrors the role matrix in CLAUDE.md §6 (Phase 2.9.1): HR documents
+    // are people data — only HR and the Head Admin can read AND write other
+    // users' documents (so HR can attach a new hire's CV during onboarding,
+    // etc.). Plain admin has no access. Regular users can only access their
+    // own folder.
     match /hr-documents/{userId}/{fileName} {
       // READ
       allow read: if isAuth() && (
         request.auth.uid == userId ||
-        callerRole() == 'admin' ||
         callerRole() == 'super_admin' ||
         callerRole() == 'hr'
       );
@@ -43,7 +44,6 @@ service firebase.storage {
       // WRITE — same matrix, plus the file must be a valid type + size.
       allow write: if isAuth() && (
         request.auth.uid == userId ||
-        callerRole() == 'admin' ||
         callerRole() == 'super_admin' ||
         callerRole() == 'hr'
       ) && isValidType() && isSmallEnough();

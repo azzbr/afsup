@@ -7,9 +7,10 @@
 //   - role/status changes must write audit_log, which firestore.rules
 //     restricts to the server (cloud functions bypass rules).
 //
-// firestore.rules still allows admin/HR to write profile fields directly
-// from the client. Only these three operations are forced through the
-// server.
+// firestore.rules still allows HR/super_admin to write profile fields
+// directly from the client (plain admin client-writes nothing on other
+// users since Phase 2.9.1). Only these three operations are forced through
+// the server.
 
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions/v2";

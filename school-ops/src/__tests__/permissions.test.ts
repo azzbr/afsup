@@ -1,5 +1,9 @@
 // Permissions matrix tests — mirrors the table in CLAUDE.md section 6.
 // When you add a new Action, add a test for it here.
+//
+// Phase 2.9.1 HR privacy lockdown: `hr` owns people data, `admin` owns
+// operations, and the two are disjoint peers under super_admin. Tests that
+// previously asserted admin's old HR grants were updated deliberately.
 
 import { describe, expect, it } from "vitest";
 import { can, actorFrom, assignableRoles, canSeeRoleView, isAdminTierRole, type Actor } from "../permissions";
@@ -146,11 +150,13 @@ describe("can() — user profiles", () => {
     expect(can(hr, "user.view.profile", target("super_admin"))).toBe(false);
   });
 
-  it("plain admin sees everyone except super_admins", () => {
-    for (const r of ["staff", "maintenance", "hr", "admin"] as const) {
-      expect(can(admin, "user.view.profile", target(r))).toBe(true);
-    }
+  it("plain admin sees staff/maintenance/admin-peer targets — hr and super_admin are out", () => {
+    expect(can(admin, "user.view.profile", target("staff"))).toBe(true);
+    expect(can(admin, "user.view.profile", target("maintenance"))).toBe(true);
+    expect(can(admin, "user.view.profile", target("admin"))).toBe(true);
+    expect(can(admin, "user.view.profile", target("hr"))).toBe(false);
     expect(can(admin, "user.view.profile", target("super_admin"))).toBe(false);
+    expect(can(admin, "user.view.profile", target("admin", "u-admin"))).toBe(true);
   });
 
   it("super_admin sees every profile", () => {
@@ -166,27 +172,37 @@ describe("can() — user profiles", () => {
 });
 
 describe("can() — privileged edits", () => {
-  it("only HR/admin can edit salary or leave balance (no target probe)", () => {
+  it("only hr/super_admin can edit salary or leave balance (no target probe)", () => {
     expect(can(staff, "user.edit.salary")).toBe(false);
     expect(can(maint, "user.edit.salary")).toBe(false);
+    expect(can(admin, "user.edit.salary")).toBe(false);
+    expect(can(viewAll, "user.edit.salary")).toBe(false);
     expect(can(hr, "user.edit.salary")).toBe(true);
-    expect(can(admin, "user.edit.salary")).toBe(true);
     expect(can(superAdmin, "user.edit.salary")).toBe(true);
 
     expect(can(staff, "user.edit.leaveBalance")).toBe(false);
+    expect(can(admin, "user.edit.leaveBalance")).toBe(false);
     expect(can(hr, "user.edit.leaveBalance")).toBe(true);
+  });
+
+  it("plain admin and viewAll can NEVER edit salary or leave balance of any target", () => {
+    for (const action of ["user.edit.salary", "user.edit.leaveBalance"] as const) {
+      for (const r of ["staff", "maintenance", "hr", "admin", "super_admin"] as const) {
+        expect(can(admin, action, target(r))).toBe(false);
+        expect(can(viewAll, action, target(r))).toBe(false);
+      }
+    }
   });
 
   it("salary/leave balance of admin-tier targets is super_admin only", () => {
     for (const action of ["user.edit.salary", "user.edit.leaveBalance"] as const) {
       for (const tier of ["admin", "super_admin"] as const) {
         expect(can(hr, action, target(tier))).toBe(false);
-        expect(can(admin, action, target(tier))).toBe(false);
-        expect(can(viewAll, action, target(tier))).toBe(false);
         expect(can(superAdmin, action, target(tier))).toBe(true);
       }
       expect(can(hr, action, target("staff"))).toBe(true);
-      expect(can(admin, action, target("staff"))).toBe(true);
+      expect(can(hr, action, target("hr"))).toBe(true);
+      expect(can(superAdmin, action, target("staff"))).toBe(true);
     }
   });
 
@@ -212,14 +228,17 @@ describe("can() — privileged edits", () => {
     expect(can(hr, "user.edit.role", target("hr"))).toBe(true);
   });
 
-  it("plain admin cannot change role/status of admins or super_admins", () => {
+  it("plain admin changes role/status of staff/maintenance only", () => {
+    expect(can(admin, "user.edit.role", target("staff"))).toBe(true);
+    expect(can(admin, "user.edit.role", target("maintenance"))).toBe(true);
+    expect(can(admin, "user.edit.status", target("staff"))).toBe(true);
+    expect(can(admin, "user.edit.role", target("hr"))).toBe(false);
+    expect(can(admin, "user.edit.status", target("hr"))).toBe(false);
     for (const tier of ["admin", "super_admin"] as const) {
       expect(can(admin, "user.edit.role", target(tier))).toBe(false);
       expect(can(admin, "user.edit.status", target(tier))).toBe(false);
       expect(can(viewAll, "user.edit.role", target(tier))).toBe(false);
     }
-    expect(can(admin, "user.edit.role", target("staff"))).toBe(true);
-    expect(can(admin, "user.edit.status", target("hr"))).toBe(true);
   });
 
   it("super_admin can change role/status of anyone", () => {
@@ -245,21 +264,27 @@ describe("can() — privileged edits", () => {
     expect(can(superAdmin, "user.invite")).toBe(true);
   });
 
-  it("only admin can delete users", () => {
+  it("only admin can delete users (capability probe)", () => {
     expect(can(staff, "user.delete")).toBe(false);
     expect(can(hr, "user.delete")).toBe(false);
     expect(can(admin, "user.delete")).toBe(true);
     expect(can(superAdmin, "user.delete")).toBe(true);
   });
 
-  it("deleting an admin or super_admin is super_admin only", () => {
-    for (const tier of ["admin", "super_admin"] as const) {
-      expect(can(admin, "user.delete", target(tier))).toBe(false);
-      expect(can(viewAll, "user.delete", target(tier))).toBe(false);
-      expect(can(hr, "user.delete", target(tier))).toBe(false);
-      expect(can(superAdmin, "user.delete", target(tier))).toBe(true);
-    }
+  it("plain admin deletes staff/maintenance targets only", () => {
     expect(can(admin, "user.delete", target("staff"))).toBe(true);
+    expect(can(admin, "user.delete", target("maintenance"))).toBe(true);
+    expect(can(admin, "user.delete", target("hr"))).toBe(false);
+    expect(can(viewAll, "user.delete", target("hr"))).toBe(false);
+  });
+
+  it("deleting an hr, admin or super_admin user is super_admin only", () => {
+    for (const r of ["hr", "admin", "super_admin"] as const) {
+      expect(can(admin, "user.delete", target(r))).toBe(false);
+      expect(can(viewAll, "user.delete", target(r))).toBe(false);
+      expect(can(hr, "user.delete", target(r))).toBe(false);
+      expect(can(superAdmin, "user.delete", target(r))).toBe(true);
+    }
   });
 
   it("user.manageAdmins is super_admin only", () => {
@@ -291,21 +316,37 @@ describe("can() — leave requests", () => {
     expect(can(superAdmin, "leave.submit")).toBe(true);
   });
 
-  it("only HR/admin approve leave", () => {
+  it("only hr/super_admin approve leave — plain admin is out", () => {
     expect(can(staff, "leave.approve")).toBe(false);
     expect(can(maint, "leave.approve")).toBe(false);
+    expect(can(admin, "leave.approve")).toBe(false);
+    expect(can(viewAll, "leave.approve")).toBe(false);
     expect(can(hr, "leave.approve")).toBe(true);
-    expect(can(admin, "leave.approve")).toBe(true);
     expect(can(superAdmin, "leave.approve")).toBe(true);
+  });
+
+  it("only hr/super_admin view all leave requests — plain admin is out", () => {
+    expect(can(staff, "leave.view.all")).toBe(false);
+    expect(can(maint, "leave.view.all")).toBe(false);
+    expect(can(admin, "leave.view.all")).toBe(false);
+    expect(can(viewAll, "leave.view.all")).toBe(false);
+    expect(can(hr, "leave.view.all")).toBe(true);
+    expect(can(superAdmin, "leave.view.all")).toBe(true);
+  });
+
+  it("everyone can view their own leave", () => {
+    expect(can(staff, "leave.view.own")).toBe(true);
+    expect(can(admin, "leave.view.own")).toBe(true);
   });
 });
 
 describe("can() — audit & settings", () => {
-  it("audit.read is manager-level", () => {
+  it("audit.read is hr/super_admin only — plain admin is out", () => {
     expect(can(staff, "audit.read")).toBe(false);
     expect(can(maint, "audit.read")).toBe(false);
+    expect(can(admin, "audit.read")).toBe(false);
+    expect(can(viewAll, "audit.read")).toBe(false);
     expect(can(hr, "audit.read")).toBe(true);
-    expect(can(admin, "audit.read")).toBe(true);
     expect(can(superAdmin, "audit.read")).toBe(true);
   });
 
@@ -335,9 +376,11 @@ describe("can() — audit & settings", () => {
 });
 
 describe("can() — viewAll override", () => {
-  it("viewAll grants admin-equivalent UI access", () => {
+  it("viewAll grants admin-equivalent OPERATIONS access", () => {
     expect(can(viewAll, "ticket.delete")).toBe(true);
-    expect(can(viewAll, "user.view.profile", target("admin"))).toBe(true);
+    expect(can(viewAll, "schedule.create")).toBe(true);
+    expect(can(viewAll, "user.edit.role", target("staff"))).toBe(true);
+    expect(can(viewAll, "user.view.profile", target("maintenance"))).toBe(true);
   });
 
   it("viewAll never grants super-admin-only actions", () => {
@@ -346,17 +389,29 @@ describe("can() — viewAll override", () => {
     expect(can(viewAll, "user.manageAdmins")).toBe(false);
   });
 
+  it("viewAll never grants HR data access", () => {
+    expect(canSeeRoleView(viewAll, "hr")).toBe(false);
+    expect(can(viewAll, "leave.approve")).toBe(false);
+    expect(can(viewAll, "leave.view.all")).toBe(false);
+    expect(can(viewAll, "audit.read")).toBe(false);
+    expect(can(viewAll, "user.edit.salary")).toBe(false);
+    expect(can(viewAll, "user.edit.salary", target("staff"))).toBe(false);
+    expect(can(viewAll, "user.edit.leaveBalance", target("staff"))).toBe(false);
+    expect(can(viewAll, "user.view.profile", target("hr"))).toBe(false);
+    expect(can(viewAll, "user.edit.role", target("hr"))).toBe(false);
+    expect(can(viewAll, "user.delete", target("hr"))).toBe(false);
+  });
+
   it("viewAll does not grant settings.read (rules have no viewAll concept)", () => {
     expect(can(viewAll, "settings.read")).toBe(false);
   });
 
-  it("viewAll does not grant audit.read (rules and useAuditLog scope by real role)", () => {
-    expect(can(viewAll, "audit.read")).toBe(false);
-  });
-
-  it("viewAll cannot see or manage super_admin targets", () => {
+  it("viewAll sees admin peers (admin-equivalent) but cannot manage the tier or see super_admin", () => {
+    expect(can(viewAll, "user.view.profile", target("admin"))).toBe(true);
     expect(can(viewAll, "user.view.profile", target("super_admin"))).toBe(false);
+    expect(can(viewAll, "user.edit.role", target("admin"))).toBe(false);
     expect(can(viewAll, "user.edit.role", target("super_admin"))).toBe(false);
+    expect(can(viewAll, "user.delete", target("admin"))).toBe(false);
     expect(can(viewAll, "user.delete", target("super_admin"))).toBe(false);
   });
 });
@@ -378,11 +433,12 @@ describe("canSeeRoleView", () => {
     expect(canSeeRoleView(superAdmin, "maintenance")).toBe(true);
   });
 
-  it("HR tab visible to hr and admin only", () => {
+  it("HR tab visible to hr and super_admin only — plain admin and viewAll are out", () => {
     expect(canSeeRoleView(staff, "hr")).toBe(false);
     expect(canSeeRoleView(maint, "hr")).toBe(false);
+    expect(canSeeRoleView(admin, "hr")).toBe(false);
+    expect(canSeeRoleView(viewAll, "hr")).toBe(false);
     expect(canSeeRoleView(hr, "hr")).toBe(true);
-    expect(canSeeRoleView(admin, "hr")).toBe(true);
     expect(canSeeRoleView(superAdmin, "hr")).toBe(true);
   });
 
@@ -408,12 +464,20 @@ describe("assignableRoles", () => {
     expect(assignableRoles(superAdmin)).toEqual(["staff", "maintenance", "hr", "admin", "super_admin"]);
   });
 
-  it("admin can assign up to admin but never super_admin", () => {
-    expect(assignableRoles(admin)).toEqual(["staff", "maintenance", "hr", "admin"]);
+  it("admin assigns staff/maintenance only — hr is people data", () => {
+    expect(assignableRoles(admin)).toEqual(["staff", "maintenance"]);
   });
 
-  it("viewAll is admin-equivalent for assignment", () => {
-    expect(assignableRoles(viewAll)).toEqual(["staff", "maintenance", "hr", "admin"]);
+  it("viewAll is admin-equivalent for operations; hr keeps the wider hr scope", () => {
+    // Matches can()'s user.edit.role and the server's canAssignRole: a
+    // viewAll actor gets the operations (staff/maintenance) scope, never
+    // hr-role or admin-tier assignment.
+    expect(assignableRoles(viewAll)).toEqual(["staff", "maintenance"]);
+    expect(assignableRoles({ uid: "u-vh", role: "hr", status: "approved", viewAll: true })).toEqual([
+      "staff",
+      "maintenance",
+      "hr",
+    ]);
   });
 
   it("HR can assign non-admin roles only", () => {

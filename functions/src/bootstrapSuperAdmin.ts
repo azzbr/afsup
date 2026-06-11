@@ -59,24 +59,24 @@ export const bootstrapSuperAdmin = onCall<BootstrapRequest, Promise<BootstrapRes
     }
 
     // -------------------------------------------------------------- authz
-    // Path (a) — caller is currently admin/super_admin.
+    // Path (a) — caller is an existing super_admin (CLAUDE.md section 6
+    // migration plan). HR privacy lockdown (Phase 2.9.1): plain admin and
+    // the legacy viewAll flag must NOT reach this — it would be a
+    // self-service elevation into the role that holds all HR data.
     const callerSnap = await db.collection("users").doc(callerUid).get();
     const callerData = callerSnap.data() ?? {};
     const callerRole = String(callerData.role ?? "");
-    const isAdminCaller =
-      callerRole === "admin" ||
-      callerRole === "super_admin" ||
-      callerData.viewAll === true;
+    const isSuperAdminCaller = callerRole === "super_admin";
 
     // Path (b) — designated principal bootstrapping themselves.
     const isBootstrapSelf =
       callerEmail === BOOTSTRAP_EMAIL.toLowerCase() &&
       targetEmail === callerEmail;
 
-    if (!isAdminCaller && !isBootstrapSelf) {
+    if (!isSuperAdminCaller && !isBootstrapSelf) {
       throw new HttpsError(
         "permission-denied",
-        "Only an existing admin/super_admin can promote others, or the designated principal can promote themselves.",
+        "Only an existing Head Admin can promote others, or the designated principal can promote themselves.",
       );
     }
 
@@ -142,7 +142,7 @@ export const bootstrapSuperAdmin = onCall<BootstrapRequest, Promise<BootstrapRes
       metadata: {
         targetEmail,
         callerEmail,
-        path: isAdminCaller ? "admin_promote" : "self_bootstrap",
+        path: isSuperAdminCaller ? "super_admin_promote" : "self_bootstrap",
       },
     });
 

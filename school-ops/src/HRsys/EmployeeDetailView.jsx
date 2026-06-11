@@ -7,7 +7,7 @@ import {
   NATIONALITIES, BAHRAIN_BANKS, SICK_LEAVE_TIERS, USER_STATUSES,
   ROLE_LABELS, LEAVE_TYPE_LABELS
 } from '../constants';
-import { actorFrom, can, assignableRoles } from '../permissions';
+import { actorFrom, can, canSeeRoleView, assignableRoles } from '../permissions';
 import { auditUpdate } from '../data/audit';
 import { USERS_KEY } from '../data/useUsers';
 import { useLeaveRequestsFor } from '../data/useLeaveRequests';
@@ -431,7 +431,6 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
   const queryClient = useQueryClient();
 
   const employeeUid = employee?.uid || employee?.id;
-  const { data: leaveRequests = [], isLoading: leaveLoading } = useLeaveRequestsFor(employeeUid ?? null);
 
   const actor = actorFrom(userData);
   const userTarget = employee
@@ -440,12 +439,23 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
   const canChangeStatus = can(actor, 'user.edit.status', userTarget);
   const canChangeRole = can(actor, 'user.edit.role', userTarget);
   const canDelete = can(actor, 'user.delete', userTarget);
-  // Whoever manages this person's account lifecycle also maintains their HR
-  // record fields. Salary/leave-balance edits would additionally need
-  // can(actor, 'user.edit.salary', userTarget) — no such inputs exist here yet.
-  const canEdit = canChangeStatus;
+  // HR-privacy lockdown: leave data and the HR document vault are people
+  // data — operations admins lose them even when they keep lifecycle power
+  // over staff/maintenance accounts. canSeeRoleView('hr') tracks the
+  // hr/super_admin pair; storage rules deny document reads to anyone else.
+  const canSeeHR = canSeeRoleView(actor, 'hr');
+  const canSeeLeave = can(actor, 'leave.view.all') || can(actor, 'user.edit.salary', userTarget);
+  const canSeeDocuments = canSeeHR;
+  // Client-side HR record edits (identity, banking, joining date) follow the
+  // matrix row "Edit other users' profile fields" — hr/super_admin only.
+  // Lifecycle power alone (plain admin over staff) no longer implies it.
+  const canEdit = canSeeHR && canChangeStatus;
   const showAdminTab = canChangeStatus || canChangeRole || canDelete;
   const roleOptions = assignableRoles(actor);
+
+  // Subscribe only when the viewer may see this person's leave data.
+  const { data: leaveRequests = [], isLoading: leaveLoading } =
+    useLeaveRequestsFor(canSeeLeave ? (employeeUid ?? null) : null);
 
   // Format date helper — hook data is already JS Dates, never Timestamps
   const formatDate = (d) => {
@@ -572,9 +582,9 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
   
   const tabs = [
     { id: 'overview', label: 'Overview', icon: User },
-    { id: 'documents', label: 'Documents', icon: FileText },
+    ...(canSeeDocuments ? [{ id: 'documents', label: 'Documents', icon: FileText }] : []),
     { id: 'employment', label: 'Employment', icon: Briefcase },
-    { id: 'leave', label: 'Leave & Attendance', icon: Calendar },
+    ...(canSeeLeave ? [{ id: 'leave', label: 'Leave & Attendance', icon: Calendar }] : []),
     ...(showAdminTab ? [{ id: 'admin', label: 'Admin Actions', icon: Shield }] : [])
   ];
   
@@ -953,8 +963,8 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
           </div>
         )}
         
-        {/* Documents Tab */}
-        {activeTab === 'documents' && (
+        {/* Documents Tab — HR document vault, hr/super_admin only */}
+        {activeTab === 'documents' && canSeeDocuments && (
           <div>
             <SectionHeader icon={FileText} title="HR Documents" subtitle="Official documentation and certificates" />
             <DocumentsSection employee={employee} canEdit={canEdit} actorUid={user?.uid} />
@@ -994,8 +1004,8 @@ export default function EmployeeDetailView({ employee, onClose, user, userData, 
           </div>
         )}
         
-        {/* Leave Tab */}
-        {activeTab === 'leave' && (
+        {/* Leave Tab — balances + history are HR data */}
+        {activeTab === 'leave' && canSeeLeave && (
           <div className="space-y-8">
             <section>
               <SectionHeader icon={Plane} title="Leave Balances" subtitle="Annual and sick leave tracking per Bahrain Labor Law" />

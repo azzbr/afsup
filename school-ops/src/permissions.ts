@@ -106,13 +106,18 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
   if (!actor) return false;
 
   const role = actor.role;
-  // super_admin (Head Admin) inherits every admin power, PLUS the
-  // principal-only capabilities: school_settings edits, full audit log,
-  // and managing the admin/super_admin tier itself.
+  // Phase 2.9.1 split: `hr` owns PEOPLE DATA (non-admin-tier profiles,
+  // salaries, leave decisions, HR documents, audit log) and `admin` owns
+  // OPERATIONS (tickets, schedules, staff/maintenance user lifecycle) with
+  // ZERO HR data access. The two roles are disjoint peers — only
+  // super_admin (Head Admin) holds both sides, plus the principal-only
+  // capabilities: school_settings edits, full audit log, and managing the
+  // admin/super_admin tier itself.
   //
-  // The legacy `viewAll` flag grants admin-EQUIVALENT access only. It must
-  // never grant the super-admin-only actions (settings.edit, audit.readAll,
-  // user.manageAdmins) or bypass the admin-tier target checks below.
+  // The legacy `viewAll` flag grants admin-EQUIVALENT (operations) access
+  // only. It must never grant HR data access, the super-admin-only actions
+  // (settings.edit, audit.readAll, user.manageAdmins), or bypass the
+  // admin-tier target checks below.
   const isSuperAdmin = role === "super_admin";
   const isAdmin = role === "admin" || isSuperAdmin || actor.viewAll === true;
   const isHR = role === "hr";
@@ -153,10 +158,14 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
       if (target?.type !== "user") return isAdmin; // capability probe
       const targetRole = target.data.role;
       if (target.data.uid === actor.uid) return true; // own profile
-      // Plain admin sees everyone except Head Admins.
-      if (isAdmin) return targetRole !== "super_admin";
-      // HR is blind to the whole admin tier.
+      // HR owns people data: everyone except the admin tier. Checked
+      // before isAdmin so an hr actor carrying viewAll keeps the wider
+      // hr scope.
       if (isHR) return targetRole !== "admin" && targetRole !== "super_admin";
+      // Plain admin is operations only: staff/maintenance targets plus
+      // admin peers (matrix: "View admin profiles" is an admin grant) —
+      // no hr-role users, no super_admin.
+      if (isAdmin) return targetRole === "staff" || targetRole === "maintenance" || targetRole === "admin";
       if (isMaintenance) return targetRole === "staff" || targetRole === "maintenance";
       if (isStaff) return targetRole === "staff";
       return false;
@@ -170,14 +179,20 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
       // No target = capability probe ("does this actor manage anyone?").
       if (target?.type !== "user") return isAnyManager;
       if (isSuperAdmin) return true;
-      // Only Head Admin manages the admin tier — plain admin and HR are
-      // both restricted to non-admin targets.
       const targetRole = target.data.role;
-      return isAnyManager && targetRole !== "admin" && targetRole !== "super_admin";
+      // HR manages the whole non-admin tier (staff/maintenance/hr peers).
+      if (isHR) return targetRole !== "admin" && targetRole !== "super_admin";
+      // Plain admin manages the staff/maintenance lifecycle only — hr-role
+      // users and the admin tier are out of reach.
+      if (isAdmin) return targetRole === "staff" || targetRole === "maintenance";
+      return false;
     }
 
     case "user.edit.salary":
     case "user.edit.leaveBalance": {
+      // Compensation is people data: hr and Head Admin only. Plain admin
+      // and the legacy viewAll flag are ALWAYS denied.
+      if (!isHR && !isSuperAdmin) return false;
       // Never the user themselves — not even Head Admin (firestore.rules
       // mirrors this with a salaryTierFields() self-write guard).
       // Admin-tier targets are Head Admin only.
@@ -186,20 +201,21 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
         const targetRole = target.data.role;
         if (targetRole === "admin" || targetRole === "super_admin") return isSuperAdmin;
       }
-      return isAnyManager;
+      return true;
     }
 
     case "user.invite":
       return isAnyManager;
 
     case "user.delete": {
-      // Deleting an admin or Head Admin is Head Admin only (last-one guard
-      // is enforced separately, server-side).
-      if (target?.type === "user") {
-        const targetRole = target.data.role;
-        if (targetRole === "admin" || targetRole === "super_admin") return isSuperAdmin;
-      }
-      return isAdmin;
+      if (isSuperAdmin) return true;
+      // No target = capability probe.
+      if (target?.type !== "user") return isAdmin;
+      // Plain admin deletes staff/maintenance only — hr-role users and the
+      // admin tier are Head Admin territory (last-one guard is enforced
+      // separately, server-side).
+      const targetRole = target.data.role;
+      return isAdmin && (targetRole === "staff" || targetRole === "maintenance");
     }
 
     case "user.manageAdmins":
@@ -218,21 +234,24 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
       return true;
 
     case "leave.approve":
-      return isAnyManager;
+      // Leave decisions are people data — hr and Head Admin only. Plain
+      // admin and viewAll are denied.
+      return isHR || isSuperAdmin;
 
     case "leave.view.own":
       return true;
 
     case "leave.view.all":
-      return isAnyManager;
+      // People data — hr and Head Admin only.
+      return isHR || isSuperAdmin;
 
     // ------------------------------------------- audit / notif / settings
     case "audit.read":
       // Entries about non-admins only — see audit.readAll for the full log.
-      // Real hr/admin roles only — firestore.rules audit_log read has no
-      // viewAll concept (and useAuditLog scopes by raw role), so granting
-      // it here would promise a read the rules refuse.
-      return isHR || role === "admin" || isSuperAdmin;
+      // People data: real hr role or Head Admin only. Plain admin and
+      // viewAll are denied — firestore.rules and useAuditLog both scope by
+      // raw role and exclude admin since the HR privacy lockdown.
+      return isHR || isSuperAdmin;
 
     case "audit.readAll":
       // Every entry, including those about admins and super_admins.
@@ -267,7 +286,8 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
 /**
  * Used by Layout/nav to decide which role-scoped views to render in the
  * sidebar. Different from `can()` actions because tabs are about visibility,
- * not authority — admins generally see HR too.
+ * not authority. The HR module is people data — hr and super_admin only;
+ * plain admin (and the legacy viewAll flag) never sees it.
  */
 export function canSeeRoleView(
   actor: Actor | null | undefined,
@@ -282,7 +302,9 @@ export function canSeeRoleView(
     case "maintenance":
       return isAdmin || actor.role === "hr" || actor.role === "maintenance";
     case "hr":
-      return isAdmin || actor.role === "hr";
+      // People data — real hr role or Head Admin only. Plain admin and
+      // viewAll are deliberately excluded.
+      return actor.role === "hr" || actor.role === "super_admin";
     case "admin":
       return isAdmin;
     default: {
@@ -303,14 +325,19 @@ export function assignableRoles(actor: Actor | null | undefined): Role[] {
     // Head Admin can assign every role, including another super_admin.
     return ["staff", "maintenance", "hr", "admin", "super_admin"];
   }
-  if (actor.role === "admin" || actor.viewAll) {
-    // Regular admin can assign up to admin, but NOT super_admin —
-    // only Head Admin promotes Head Admins (Phase 2.6 enforcement).
-    return ["staff", "maintenance", "hr", "admin"];
-  }
   if (actor.role === "hr") {
-    // HR can promote/demote among non-admin roles only.
+    // HR can promote/demote among non-admin roles only. Checked before the
+    // viewAll branch so an hr actor carrying viewAll keeps the wider hr
+    // scope (mirrors the isHR-before-isAdmin ordering in can()).
     return ["staff", "maintenance", "hr"];
+  }
+  if (actor.role === "admin" || actor.viewAll === true) {
+    // Operations tier: manages the staff/maintenance lifecycle only —
+    // hr-role users belong to the people-data side (hr / Head Admin).
+    // The legacy viewAll flag is admin-EQUIVALENT here, matching can()'s
+    // user.edit.role branch and the server's canAssignRole — it still
+    // never unlocks hr-role or admin-tier assignment.
+    return ["staff", "maintenance"];
   }
   return [];
 }

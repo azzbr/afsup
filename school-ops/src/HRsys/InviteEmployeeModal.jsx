@@ -10,12 +10,15 @@ import { functions } from '../firebase';
 import {
   ROLE_LABELS, DEPARTMENTS, DEPARTMENT_LABELS, CONTRACT_TYPES, CONTRACT_TYPE_LABELS,
 } from '../constants';
-import { actorFrom, assignableRoles } from '../permissions';
+import { actorFrom, can, assignableRoles } from '../permissions';
 
 export default function InviteEmployeeModal({ isOpen, onClose, userData }) {
   const actor = actorFrom(userData);
   const roles = assignableRoles(actor);
   const defaultRole = roles.includes('staff') ? 'staff' : roles[0] ?? '';
+  // HR-privacy lockdown: employment/compensation details at invite time are
+  // an HR surface. Capability probe (no target) — true for hr/super_admin.
+  const canSetEmployment = can(actor, 'user.edit.salary');
 
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
@@ -77,13 +80,18 @@ export default function InviteEmployeeModal({ isOpen, onClose, userData }) {
         middleName: middleName.trim() || undefined,
         lastName: lastName.trim(),
         appBaseUrl,
-        // Phase 2.5 — only send if user filled the optional section
-        position: position.trim() || undefined,
-        department: department || undefined,
-        contractType: contractType || undefined,
-        contractStartDate: contractStartDate || undefined,
-        employeeNumber: employeeNumber.trim() || undefined,
-        isTeacher: isTeacher || undefined,
+        // Phase 2.5 — only send if the actor may set employment details and
+        // actually filled the optional section
+        ...(canSetEmployment
+          ? {
+              position: position.trim() || undefined,
+              department: department || undefined,
+              contractType: contractType || undefined,
+              contractStartDate: contractStartDate || undefined,
+              employeeNumber: employeeNumber.trim() || undefined,
+              isTeacher: isTeacher || undefined,
+            }
+          : {}),
       });
       setResult(res.data);
     } catch (err) {
@@ -246,7 +254,9 @@ export default function InviteEmployeeModal({ isOpen, onClose, userData }) {
                 </p>
               </div>
 
-              {/* Optional employment details — collapsed by default */}
+              {/* Optional employment details — collapsed by default,
+                  hr/super_admin only */}
+              {canSetEmployment && (
               <div className="border-t border-slate-100 pt-3">
                 <button
                   type="button"
@@ -324,6 +334,7 @@ export default function InviteEmployeeModal({ isOpen, onClose, userData }) {
                   </div>
                 )}
               </div>
+              )}
 
               <button
                 type="submit"

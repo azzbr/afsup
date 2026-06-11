@@ -41,6 +41,7 @@ Phases 2.6 → 5 below take us there.
 | 2.7 — Multi-type leave | ◐ Started | Constants + balance lib exist; `decideLeaveRequest` CF (delivered with 2.6.1) already debits per-type balances. Remaining: per-type submission UI polish, annual reset CF, tier preview. |
 | 2.8 — Maintenance V2 | ✅ Done (2026-06-10) | Form V2, Queue V2, schedules fix, status-change CF, supervisor Insights, `cancelled` status, notes thread all shipped. |
 | 2.9 — HR Manager Toolkit | ✅ Done (2026-06-11) | Reports Center (12 reports, previews, print views, salary gate), `/audit-log` reader with `targetAdminTier` scoping, HR doc upload on employee profiles, all leftover low-severity fixes. 98 tests passing. |
+| 2.9.1 — HR privacy lockdown | ✅ Done (2026-06-12) | `admin` is ops-only on all four surfaces (can(), functions, firestore.rules, storage.rules): no HR module, salaries, leave, HR docs, audit log, notifications beyond its own. Review also closed a notifications-rule leak and a bootstrapSuperAdmin self-promotion hole. 102 tests. **Post-deploy action: give the real HR officer the `hr` role.** Follow-up queued: move compensation to `users/{uid}/private/*` to close doc-level read exposure. |
 | 3 — Unification & polish | ⏳ Queued | Profile-merged-with-tickets view, PWA, Sentry. |
 | 4 — Automation | ◐ Started | dailyComplianceScan + runScheduledTasks exist. SLA escalation + event notifications remain. |
 | 5+ — Differentiators | 🆕 Planning | Sharpened by competitor research (see §Appendix A). |

@@ -63,7 +63,8 @@ function isValidEmail(email: string): boolean {
 }
 
 // All five roles are valid invite targets; canAssignRole() decides per-caller
-// (admin invites up to admin, only super_admin invites super_admin).
+// (admin invites staff/maintenance only, hr invites staff/maintenance/hr,
+// only super_admin invites the admin tier).
 function isValidRole(role: unknown): role is Role {
   return (
     role === "staff" ||
@@ -157,12 +158,25 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
 
     // ---------------------------------------------- create Firestore user
     // Doc exists BEFORE the user ever signs in. No polling, no race.
-    const position = String(data.position ?? "").trim();
-    const department = data.department ?? null;
-    const contractType = data.contractType ?? null;
-    const isTeacher = Boolean(data.isTeacher);
-    const employeeNumber = String(data.employeeNumber ?? "").trim();
-    const contractStartDate = data.contractStartDate ? new Date(data.contractStartDate) : null;
+    //
+    // Phase 2.9.1 HR privacy lockdown: compensation/leave fields AND the
+    // employment metadata (position/department/contract/employee number/
+    // isTeacher) are people data — only hr and super_admin callers may seed
+    // them at invite time (the client hides the whole employment block from
+    // plain admin; this mirrors that server-side). Admin-created docs get
+    // empty/null defaults silently; HR fills them in later. Role check
+    // only — the legacy viewAll flag must never grant HR data access.
+    const callerIsHRTier = callerData.role === "hr" || callerData.role === "super_admin";
+    const compensationDefaults = callerIsHRTier
+      ? { sickDaysUsed: 0, annualLeaveBalance: 30 }
+      : {};
+    const position = callerIsHRTier ? String(data.position ?? "").trim() : "";
+    const department = callerIsHRTier ? data.department ?? null : null;
+    const contractType = callerIsHRTier ? data.contractType ?? null : null;
+    const isTeacher = callerIsHRTier ? Boolean(data.isTeacher) : false;
+    const employeeNumber = callerIsHRTier ? String(data.employeeNumber ?? "").trim() : "";
+    const contractStartDate =
+      callerIsHRTier && data.contractStartDate ? new Date(data.contractStartDate) : null;
 
     await db.collection("users").doc(newUid).set({
       uid: newUid,
@@ -187,8 +201,7 @@ export const inviteUser = onCall<InviteUserRequest, Promise<InviteUserResponse>>
       passportNumber: "",
       iban: "BH",
       bankName: "National Bank of Bahrain (NBB)",
-      sickDaysUsed: 0,
-      annualLeaveBalance: 30,
+      ...compensationDefaults,
       phoneNumber: "",
       // Phase 2.5 — captured at invite time when known
       position,

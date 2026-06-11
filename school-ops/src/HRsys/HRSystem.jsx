@@ -3,7 +3,7 @@ import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { functions } from '../firebase';
-import { actorFrom, can } from '../permissions';
+import { actorFrom, can, canSeeRoleView } from '../permissions';
 import { useUsers, USERS_KEY } from '../data/useUsers';
 import { useLeaveRequests, LEAVE_REQUESTS_KEY } from '../data/useLeaveRequests';
 import { complianceAlertsAll } from '../hr/compliance';
@@ -443,18 +443,30 @@ const BirthdaysAnniversariesWidget = ({ employees }) => {
 // ============================================================================
 
 export default function HRSystem({ user, userData, initialView = 'dashboard', initialEmployeeUid = null }) {
-  const [activeView, setActiveView] = useState(initialView); // 'dashboard', 'directory', 'employee'
+  const actor = actorFrom(userData);
+  // HR privacy lockdown (Phase 2.9.1): the HR module proper (Dashboard +
+  // Reports) is people data — hr and Head Admin only. Other actors reach
+  // this component via /staff-directory and /employees/:uid and get the
+  // directory/employee views only.
+  const canSeeHRModule = canSeeRoleView(actor, 'hr');
+
+  const [activeView, setActiveView] = useState(
+    !canSeeHRModule && (initialView === 'dashboard' || initialView === 'reports')
+      ? 'directory'
+      : initialView
+  ); // 'dashboard', 'directory', 'reports', 'employee'
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
 
-  const actor = actorFrom(userData);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   // Live data from Firestore — subscriptions auto-update after mutations.
   const { data: allUsers = [], isLoading: usersLoading } = useUsers(actor, Boolean(userData));
+  // Pending-leave subscription only for actors who may see all leave —
+  // passing a non-HR actor would fall back to an own-requests subscription.
   const { data: pendingLeaveRaw = [], isLoading: leaveLoading } =
-    useLeaveRequests(actor, 'pending');
+    useLeaveRequests(can(actor, 'leave.view.all') ? actor : null, 'pending');
 
   const loading = usersLoading || leaveLoading;
 
@@ -479,10 +491,11 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
   }, [pendingLeaveRaw]);
 
   // Shared compliance module (src/hr/compliance.ts) — same thresholds as the
-  // Cloud Function scan, sorted critical-first.
+  // Cloud Function scan, sorted critical-first. HR compliance is people
+  // data, so it is not computed for actors outside the HR module.
   const complianceAlerts = useMemo(
-    () => complianceAlertsAll(employees),
-    [employees]
+    () => (canSeeHRModule ? complianceAlertsAll(employees) : []),
+    [employees, canSeeHRModule]
   );
 
   // When opened via /employees/:uid, auto-select that employee once loaded.
@@ -586,15 +599,19 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
       {/* Navigation Breadcrumb */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm">
-          <button
-            onClick={() => setActiveView('dashboard')}
-            className={`px-3 py-1.5 rounded-lg transition-colors ${
-              activeView === 'dashboard' ? 'bg-indigo-100 text-indigo-700 font-medium' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Dashboard
-          </button>
-          <ChevronRight size={16} className="text-slate-300" />
+          {canSeeHRModule && (
+            <>
+              <button
+                onClick={() => setActiveView('dashboard')}
+                className={`px-3 py-1.5 rounded-lg transition-colors ${
+                  activeView === 'dashboard' ? 'bg-indigo-100 text-indigo-700 font-medium' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                Dashboard
+              </button>
+              <ChevronRight size={16} className="text-slate-300" />
+            </>
+          )}
           <button
             onClick={() => setActiveView('directory')}
             className={`px-3 py-1.5 rounded-lg transition-colors ${
@@ -603,15 +620,19 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
           >
             Staff Directory
           </button>
-          <ChevronRight size={16} className="text-slate-300" />
-          <button
-            onClick={() => setActiveView('reports')}
-            className={`px-3 py-1.5 rounded-lg transition-colors ${
-              activeView === 'reports' ? 'bg-indigo-100 text-indigo-700 font-medium' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Reports
-          </button>
+          {canSeeHRModule && (
+            <>
+              <ChevronRight size={16} className="text-slate-300" />
+              <button
+                onClick={() => setActiveView('reports')}
+                className={`px-3 py-1.5 rounded-lg transition-colors ${
+                  activeView === 'reports' ? 'bg-indigo-100 text-indigo-700 font-medium' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                Reports
+              </button>
+            </>
+          )}
           {activeView === 'employee' && selectedEmployee && (
             <>
               <ChevronRight size={16} className="text-slate-300" />
@@ -641,8 +662,8 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
         </div>
       </div>
       
-      {/* DASHBOARD VIEW */}
-      {activeView === 'dashboard' && (
+      {/* DASHBOARD VIEW — HR module, people data (hr / Head Admin only) */}
+      {activeView === 'dashboard' && canSeeHRModule && (
         <>
           {/* Compliance Alert Banner */}
           {complianceAlerts.length > 0 && (
@@ -774,8 +795,8 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
         />
       )}
 
-      {/* REPORTS VIEW */}
-      {activeView === 'reports' && (
+      {/* REPORTS VIEW — HR module, people data (hr / Head Admin only) */}
+      {activeView === 'reports' && canSeeHRModule && (
         <HRReports employees={employees} actor={actor} />
       )}
 

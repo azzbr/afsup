@@ -60,19 +60,21 @@ service cloud.firestore {
 
     // 1. Users Collection
     match /users/{userId} {
-      // READ:
+      // READ (Phase 2.9.1 — admin is a pure operations role):
       //   - own profile
       //   - super_admin sees everyone
-      //   - plain admin sees everyone EXCEPT super_admins (matrix: "View
-      //     super_admin profiles" is super_admin-only; list queries must be
-      //     role-scoped — see useUsers)
-      //   - HR sees non-admins
+      //   - plain admin sees staff + maintenance docs plus admin peers
+      //     (matrix: "View admin profiles" is an admin grant; hr-role and
+      //     super_admin profiles are off-limits; list queries must be
+      //     role-scoped — see useUsers). isAdmin() includes super_admin,
+      //     which is fine because isSuperAdmin() is checked first.
+      //   - HR sees non-admin-tier (staff, maintenance, hr)
       //   - maintenance sees staff + maintenance
       //   - staff sees other staff
       allow read: if isAuthenticated() && (
         request.auth.uid == userId ||
         isSuperAdmin() ||
-        (isAdmin() && resource.data.role != 'super_admin') ||
+        (isAdmin() && resource.data.role in ['staff', 'maintenance', 'admin']) ||
         (isHR() && resource.data.role != 'admin' && resource.data.role != 'super_admin') ||
         (getUserRole() == 'maintenance' && ['staff', 'maintenance'].hasAny([resource.data.role])) ||
         (getUserRole() == 'staff' && resource.data.role == 'staff')
@@ -91,42 +93,33 @@ service cloud.firestore {
                        (request.auth.token.email == 'admin@afs.edu.bh')
                     );
 
-      // UPDATE — IMPORTANT INVARIANTS:
+      // UPDATE — IMPORTANT INVARIANTS (Phase 2.9.1):
       //   - role and status can NEVER be changed via direct client write.
       //     Both go through the updateUserRole / updateUserStatus Cloud
       //     Functions, which write audit_log atomically.
-      //   - A super_admin's doc may only be written by a super_admin or by
-      //     the Head Admin themselves (plain admin hands off).
-      //   - Salary/leave fields on an admin's doc are super_admin-only.
-      //   - Subject to that, admin/super_admin can edit anyone, HR can edit
-      //     non-admins (salary, leave balance, etc.), and any user can edit
-      //     their own non-restricted profile fields.
+      //   - Plain admin client-writes NOTHING on other users' docs — profile
+      //     data is people data (hr/super_admin only); the staff/maintenance
+      //     lifecycle goes through the Cloud Functions, which are scoped
+      //     server-side in functions/src/permissions.ts.
+      //   - super_admin can edit any doc, HR can edit non-admin-tier docs
+      //     (salary, leave balance, etc.), and any user can edit their own
+      //     non-restricted profile fields.
       allow update: if (
         // role + status are immutable from the client surface
         request.resource.data.role == resource.data.role
         && request.resource.data.status == resource.data.status
       ) && (
-        // Plain admin cannot touch a super_admin target doc at all.
-        resource.data.role != 'super_admin'
-        || isSuperAdmin()
-        || request.auth.uid == userId
-      ) && (
-        // Salary-tier fields on an admin doc require super_admin.
-        resource.data.role != 'admin'
-        || isSuperAdmin()
-        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(salaryTierFields())
-      ) && (
         // NEVER-self guard (CLAUDE.md section 5): salary/leave-balance fields
-        // are HR/admin-only and never self-editable. Applies to EVERY branch
+        // are HR-only and never self-editable. Applies to EVERY branch
         // below — without it an HR (or super_admin) actor passes their role
         // branch and the own-profile restrictedSelfFields() check is skipped.
         request.auth.uid != userId
         || !request.resource.data.diff(resource.data).affectedKeys().hasAny(salaryTierFields())
       ) && (
-        isAdmin()
+        isSuperAdmin()
         || (isHR() && resource.data.role != 'admin' && resource.data.role != 'super_admin')
         || (
-          // Own-profile branch: never the HR/admin-only fields.
+          // Own-profile branch: never the HR-only fields.
           isAuthenticated() && request.auth.uid == userId
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(restrictedSelfFields())
         )
@@ -164,10 +157,11 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
-    // 4. Leave Requests Collection
+    // 4. Leave Requests Collection (Phase 2.9.1: leave is people data —
+    // hr/super_admin only; plain admin is out entirely)
     match /leave_requests/{requestId} {
-      // READ: Author can see own requests, HR and admins see all
-      allow read: if isAdmin() || isHR() ||
+      // READ: Author can see own requests; HR and the Head Admin see all
+      allow read: if isSuperAdmin() || isHR() ||
                   (isAuthenticated() && resource.data.userId == request.auth.uid);
 
       // CREATE: Authenticated users can create leave requests for themselves,
@@ -176,15 +170,15 @@ service cloud.firestore {
                     request.auth.uid == request.resource.data.userId &&
                     request.resource.data.status == 'pending';
 
-      // UPDATE: HR/admin may edit non-status fields only. Approve/reject
+      // UPDATE: HR/Head Admin may edit non-status fields only. Approve/reject
       // decisions go through the decideLeaveRequest Cloud Function (admin
       // SDK bypasses these rules), which debits balances atomically and
       // blocks deciding your own request.
-      allow update: if (isAdmin() || isHR()) &&
+      allow update: if (isSuperAdmin() || isHR()) &&
                     request.resource.data.status == resource.data.status;
 
-      // DELETE: Admins only
-      allow delete: if isAdmin();
+      // DELETE: Head Admin only
+      allow delete: if isSuperAdmin();
     }
 
     // 5. Invitations Collection (Phase 2 — invitation-based onboarding)
@@ -205,13 +199,14 @@ service cloud.firestore {
     // 6. Audit Log (Phase 1/2 — append-only history)
     //
     // Written exclusively by Cloud Functions. super_admin reads everything;
-    // HR/admin read only entries about non-admin-tier targets
+    // HR reads only entries about non-admin-tier targets
     // (targetAdminTier == false, per the CLAUDE.md section 6 matrix).
-    // Pre-2026-06-11 entries lack the field and so remain super_admin-only
-    // (safe default). No one may update or delete.
+    // Plain admin reads nothing (Phase 2.9.1 — the audit log is people
+    // data). Pre-2026-06-11 entries lack the field and so remain
+    // super_admin-only (safe default). No one may update or delete.
     match /audit_log/{entry} {
       allow read: if isSuperAdmin() ||
-                  ((isAdmin() || isHR()) && resource.data.targetAdminTier == false);
+                  (isHR() && resource.data.targetAdminTier == false);
       allow write: if false; // Cloud Functions only.
     }
 
@@ -219,12 +214,15 @@ service cloud.firestore {
     //
     // Written by Cloud Functions. Each notification targets a specific uid
     // or a role broadcast key (e.g. "role:hr"). Users read their own + any
-    // broadcasts matching their role.
+    // broadcasts matching their role. Only the Head Admin may read across
+    // all targets (Phase 2.9.1: role:hr broadcasts and leave_decision
+    // notifications carry people data — a plain admin must not be able to
+    // query them; the role-broadcast branch already covers role:admin).
     match /notifications/{notification} {
       allow read: if isAuthenticated() && (
         resource.data.targetUid == request.auth.uid ||
         resource.data.targetUid == 'role:' + getUserRole() ||
-        isAdmin()
+        isSuperAdmin()
       );
       // Users may mark their own notifications as read by patching readAt.
       allow update: if isAuthenticated() &&

@@ -38,8 +38,11 @@ function convertUser(id: string, data: Record<string, unknown>): User {
 // hold for EVERY doc the query could match, so the query carries an explicit
 // `role in [...]` filter mirroring the firestore.rules read branches. Only
 // super_admin (absent here) may subscribe to the whole collection.
+// HR privacy lockdown (Phase 2.9.1): plain admin is operations only and
+// lists staff/maintenance docs plus admin peers (matrix: "View admin
+// profiles") — no hr-role docs, no super_admin docs.
 const LIST_SCOPE: Partial<Record<Role, Role[]>> = {
-  admin: ["staff", "maintenance", "hr", "admin"],
+  admin: ["staff", "maintenance", "admin"],
   hr: ["staff", "maintenance", "hr"],
   maintenance: ["staff", "maintenance"],
   staff: ["staff"],

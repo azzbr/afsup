@@ -218,7 +218,7 @@ A single document (id `current`) holding school-wide knobs that used to be hardc
 
 **Single source of truth.** Both UI components and [firestore.rules](firestore.rules) MUST reflect this table.
 
-The role hierarchy is **`super_admin` > `admin` > `hr` ≈ `maintenance` ≈ `staff`**. `super_admin` (Head Admin / Principal) inherits every `admin` permission plus the items in the bottom rows.
+The role hierarchy is **`super_admin` > `admin` ≈ `hr` > `maintenance` ≈ `staff`**. `super_admin` (Head Admin / Principal) holds every permission. **HR-privacy lockdown (2026-06-11):** `admin` is a pure *operations* role — maintenance, schedules, and staff/maintenance user lifecycle — with **no access to HR data** (salaries, leave, HR documents, the HR module, the audit log). People data belongs to `hr` and `super_admin` only; the two columns are disjoint by design, not nested.
 
 | Action | staff | maintenance | hr | admin | super_admin |
 |---|:---:|:---:|:---:|:---:|:---:|
@@ -228,31 +228,37 @@ The role hierarchy is **`super_admin` > `admin` > `hr` ≈ `maintenance` ≈ `st
 | View all tickets | – | ✓ | ✓ | ✓ | ✓ |
 | Update ticket status | – | ✓ | – | ✓ | ✓ |
 | Escalate ticket priority | – | – | ✓ | ✓ | ✓ |
-| Delete ticket | – | – | – | ✓ | ✓ |
+| Delete / cancel ticket | – | – | – | ✓ | ✓ |
 | Create scheduled task | – | – | – | ✓ | ✓ |
 | **Profiles** | | | | | |
 | View own profile | ✓ | ✓ | ✓ | ✓ | ✓ |
 | View staff/maintenance profiles | – | ✓ | ✓ | ✓ | ✓ |
-| View HR profiles | – | – | ✓ | ✓ | ✓ |
+| View HR-role profiles | – | – | ✓ | – | ✓ |
 | View admin profiles | – | – | – | ✓ | ✓ |
 | View super_admin profiles | – | – | – | – | ✓ |
+| See HR module (dashboard / directory / reports) | – | – | ✓ | – | ✓ |
 | Edit own non-restricted profile fields | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Edit role/status of staff/maint/hr | – | – | ✓ | ✓ | ✓ |
-| Edit role/status of admins | – | – | – | – | ✓ |
-| Edit role/status of super_admins | – | – | – | – | ✓ (with last-one guard) |
-| Edit salary / leave balance / sick days (non-admin) | – | – | ✓ | ✓ | ✓ |
+| Edit other users' profile fields (client writes) | – | – | ✓ (non-admin tier) | – | ✓ |
+| Edit role/status of staff/maintenance | – | – | ✓ | ✓ | ✓ |
+| Edit role/status of hr users | – | – | ✓ | – | ✓ |
+| Edit role/status of admins / super_admins | – | – | – | – | ✓ (with last-one guard) |
+| Edit salary / leave balance / sick days (non-admin, never self) | – | – | ✓ | – | ✓ |
 | Edit salary of admin or super_admin | – | – | – | – | ✓ |
-| Invite staff / maintenance / hr | – | – | ✓ | ✓ | ✓ |
-| Invite admin | – | – | – | – | ✓ |
-| Invite super_admin | – | – | – | – | ✓ |
-| Delete non-admin users | – | – | – | ✓ | ✓ |
+| View / upload HR documents of others | – | – | ✓ | – | ✓ |
+| Invite staff / maintenance | – | – | ✓ | ✓ | ✓ |
+| Invite hr | – | – | ✓ | – | ✓ |
+| Invite admin / super_admin | – | – | – | – | ✓ |
+| Set salary fields at invite time | – | – | ✓ | – | ✓ |
+| Delete staff / maintenance users | – | – | – | ✓ | ✓ |
+| Delete hr users | – | – | – | – | ✓ |
 | Delete admin or super_admin | – | – | – | – | ✓ (with last-one guard) |
 | **Leave** | | | | | |
 | Submit own leave request | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Approve/reject leave request | – | – | ✓ | ✓ | ✓ |
+| View all leave requests | – | – | ✓ | – | ✓ |
+| Approve/reject leave request | – | – | ✓ | – | ✓ |
 | Approve own leave request | – | – | – | – | – (always routes up) |
 | **Audit & Settings** | | | | | |
-| Read audit log (entries about non-admins) | – | – | ✓ | ✓ | ✓ |
+| Read audit log (entries about non-admins) | – | – | ✓ | – | ✓ |
 | Read audit log (all entries, incl. admins + super_admins) | – | – | – | – | ✓ |
 | Read school_settings | – | – | ✓ | ✓ | ✓ |
 | Edit school_settings | – | – | – | – | ✓ |
@@ -261,9 +267,11 @@ The role hierarchy is **`super_admin` > `admin` > `hr` ≈ `maintenance` ≈ `st
 > **Ticket-read footnote.** At the data layer, `maintenance_tickets` reads are allowed for ALL authenticated users (including anonymous kiosk reporters) — required by the submit form's duplicate-report guard and the My Reports list. UI visibility of ticket lists still follows the Tickets rows above.
 
 **Rules of thumb:**
-- **HR** is everything an `admin` does for non-admin people. Cannot touch `admin` or `super_admin` rows at all.
-- **admin** does day-to-day ops (HR + scheduling + tickets + non-admin user lifecycle). Cannot touch other admins or super_admins.
-- **super_admin** is the principal-level role: the only one who can change school-wide settings, manage the admin/super_admin tier itself, and read every audit-log entry. The minimum number of active super_admins at any time is **1** — a "last super_admin" guard prevents the system from being left with zero.
+- **hr** owns *people data*: profiles of non-admin-tier users, salaries, leave decisions, HR documents, HR reports, audit log (non-admin entries). No ticket administration, no schedules, no admin-tier anything.
+- **admin** owns *operations*: tickets, schedules, and the staff/maintenance user lifecycle (invite, approve, role within staff/maintenance, delete). **Zero HR data** — cannot see the HR module, salaries, leave requests, HR documents, or the audit log. Cannot touch hr-role users or the admin tier.
+- **super_admin** is the principal-level role: everything hr + admin can do, plus school-wide settings, the admin/super_admin tier itself, and the full audit log. The minimum number of active super_admins at any time is **1** — a "last super_admin" guard prevents the system from being left with zero.
+
+> **Known limitation (read-level).** Compensation fields live flat on `users/{uid}`, and Firestore reads are doc-level — an `admin` who can read a staff doc technically receives the salary fields in the payload even though every UI hides them and every write path denies them. The complete fix is moving compensation to a `users/{uid}/private/*` subdocument (planned follow-up); until then the lockdown is enforced at the module, query-scope, write, storage, and audit layers.
 
 **Implementation:** one `src/permissions.ts` exporting a single function:
 

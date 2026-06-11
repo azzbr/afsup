@@ -4,7 +4,7 @@ import { httpsCallable } from 'firebase/functions';
 import { useQueryClient } from '@tanstack/react-query';
 import { db, functions } from './firebase';
 import { ROLE_LABELS } from './constants';
-import { actorFrom, can, assignableRoles } from './permissions';
+import { actorFrom, can, canSeeRoleView, assignableRoles } from './permissions';
 import { complianceAlertsAll } from './hr/compliance';
 import { useUsers, USERS_KEY } from './data/useUsers';
 import { useScheduledTasks } from './data/useScheduledTasks';
@@ -172,7 +172,19 @@ export default function AdminView({
   onDeleteTicket,
   initialTab
 }) {
-  const [activeTab, setActiveTab] = useState(initialTab || 'overview');
+  // HR-privacy lockdown: plain admin is an operations-only role. Compliance
+  // alerts, leave processing, and the HR document vault are HR surfaces —
+  // resolve the gates up front so neither the Alerts tab nor the leave
+  // subscription exists for actors without HR access.
+  const actor = actorFrom(userData);
+  const canSeeHRCompliance = canSeeRoleView(actor, 'hr');
+  const canViewAllLeave = can(actor, 'leave.view.all');
+  const showAlertsTab = canSeeHRCompliance || canViewAllLeave;
+
+  const [activeTab, setActiveTab] = useState(() => {
+    const tab = initialTab || 'overview';
+    return tab === 'notifications' && !showAlertsTab ? 'overview' : tab;
+  });
   const [openDropdown, setOpenDropdown] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [detailTicket, setDetailTicket] = useState(null);
@@ -187,10 +199,11 @@ export default function AdminView({
   const [quickNote, setQuickNote] = useState({});
 
   // Live data — subscriptions auto-update after mutations.
-  const actor = actorFrom(userData);
   const { data: allUsers = [] } = useUsers(actor, Boolean(userData));
   const { data: allSchedules = [] } = useScheduledTasks(Boolean(userData));
-  const { data: pendingLeaveRequests = [] } = useLeaveRequests(actor, 'pending');
+  // Pass null when the actor lacks leave.view.all — handing the actor through
+  // would fall back to an own-requests subscription, not an empty one.
+  const { data: pendingLeaveRequests = [] } = useLeaveRequests(canViewAllLeave ? actor : null, 'pending');
 
   // Filter users via the permissions module. Add `id` alias for legacy UI.
   const visibleUsers = useMemo(() => {
@@ -204,7 +217,11 @@ export default function AdminView({
 
   // Shared compliance module (src/hr/compliance.ts) — same thresholds as the
   // HR dashboard and the Cloud Function scan, sorted critical-first.
-  const hrAlerts = useMemo(() => complianceAlertsAll(visibleUsers), [visibleUsers]);
+  // Empty for operations-only admins: compliance data is an HR surface.
+  const hrAlerts = useMemo(
+    () => (canSeeHRCompliance ? complianceAlertsAll(visibleUsers) : []),
+    [visibleUsers, canSeeHRCompliance]
+  );
 
   // Mutations only need to read this once. Kept for back-compat with UI checks.
   const canManageUsers = can(actor, 'user.invite');
@@ -464,7 +481,9 @@ export default function AdminView({
       <div className="flex gap-2 border-b border-slate-200 pb-1">
         {[
           { id: 'overview', label: 'Ticket Oversight', icon: ShieldAlert },
-          { id: 'notifications', label: 'Alerts', icon: AlertTriangle, badge: hrAlerts.length + pendingLeaveRequests.length },
+          ...(showAlertsTab
+            ? [{ id: 'notifications', label: 'Alerts', icon: AlertTriangle, badge: hrAlerts.length + pendingLeaveRequests.length }]
+            : []),
           { id: 'users', label: 'User Management', icon: User },
           { id: 'schedules', label: 'Schedules', icon: Calendar }
         ].map((tab) => (
@@ -710,17 +729,20 @@ export default function AdminView({
                             <Loader2 className="w-5 h-5 animate-spin text-indigo-600" />
                           ) : (
                             <>
-                              {/* View Documents Button */}
-                              <button
-                                onClick={() => {
-                                  setSelectedUserDocs(u.documents || {});
-                                  setSelectedUserName(u.displayName || u.email);
-                                  setShowDocModal(true);
-                                }}
-                                className="text-indigo-600 hover:bg-indigo-50 p-1.5 rounded" title="View HR Documents"
-                              >
-                                <FolderOpen size={16} />
-                              </button>
+                              {/* View Documents — HR vault, hidden from operations
+                                  admins (storage rules deny their reads anyway) */}
+                              {canSeeHRCompliance && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedUserDocs(u.documents || {});
+                                    setSelectedUserName(u.displayName || u.email);
+                                    setShowDocModal(true);
+                                  }}
+                                  className="text-indigo-600 hover:bg-indigo-50 p-1.5 rounded" title="View HR Documents"
+                                >
+                                  <FolderOpen size={16} />
+                                </button>
+                              )}
 
                               {!isCurrentUser && (() => {
                                 // All gating goes through can() / assignableRoles().
@@ -957,7 +979,7 @@ export default function AdminView({
       )}
 
       {/* HR Documents Viewer Modal */}
-      {showDocModal && (
+      {showDocModal && canSeeHRCompliance && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-2xl">
             <div className="flex justify-between items-center mb-6 border-b pb-4">
@@ -1005,9 +1027,10 @@ export default function AdminView({
       )}
 
       {/* --- CONTENT: NOTIFICATIONS (New Tab) --- */}
-      {activeTab === 'notifications' && (
+      {activeTab === 'notifications' && showAlertsTab && (
         <div className="space-y-6">
-          {/* HR Compliance Alerts */}
+          {/* HR Compliance Alerts — HR surface, hidden from operations admins */}
+          {canSeeHRCompliance && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
             <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
               <AlertTriangle size={20} className="text-amber-600" />
@@ -1051,8 +1074,10 @@ export default function AdminView({
               )}
             </div>
           </div>
+          )}
 
-          {/* Leave Requests (Will show when staff submit leave requests) */}
+          {/* Leave Requests — gated on leave.view.all */}
+          {canViewAllLeave && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
             <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
               <Calendar size={20} className="text-blue-600" />
@@ -1113,8 +1138,10 @@ export default function AdminView({
               )}
             </div>
           </div>
+          )}
 
-          {/* Document Uploads (Recent activity - new docs uploaded) */}
+          {/* Document Uploads (Recent activity) — HR document surface */}
+          {canSeeHRCompliance && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
             <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
               <FileText size={20} className="text-emerald-600" />
@@ -1127,6 +1154,7 @@ export default function AdminView({
               <p className="text-sm text-slate-400 mt-1">Staff uploads will be tracked here</p>
             </div>
           </div>
+          )}
         </div>
       )}
 
