@@ -8,9 +8,13 @@
 > Students / Cohort Analysis / Early Warning). This is a SCOPE, not code.
 >
 > **Locked decisions:** (1) import = **super_admin only**; view = admin tier.
-> (2) `functions/` consumes the parser via a **relative TS import** (one source of
-> truth). (3) file transport = **Cloud Storage upload**. (4) audit display = **both**
-> current run + persisted history. (5) Phase 1 ships the **full dashboards**.
+> (2) `functions/` consumes the parser via a **build-time copy** (one source of
+> truth; `scripts/copy-sis.mjs` → git-ignored `functions/src/sis/`). (3) file
+> transport = **Cloud Storage upload**. (4) audit display = **both** current run +
+> persisted history. (5) Phase 1 ships the **full dashboards**.
+>
+> **Status:** 1a–1d done & on a branch (parser/metrics/CF built; oracle 6/6).
+> 1e/1f (permissions + Import UI) next; 1g–1j (dashboards) after.
 
 ---
 
@@ -221,9 +225,12 @@ before "Phase 1 done"; assert numbers only, never log names/scores.
 1. **Who can run an import → super_admin (Head Admin) only.** `student.import` =
    `isSuperAdmin` on both client + functions; excludes the legacy `viewAll`
    back-door. `student.view` stays admin-tier (admin + super_admin).
-2. **`functions/` consumes the parser/metrics → relative TS import** from
-   `school-ops/src/sis/*` (one source of truth; adjust `functions/tsconfig.json`
-   `rootDir`/`include` so the oracle-validated code is identical on both surfaces).
+2. **`functions/` consumes the parser/metrics → build-time copy** (implemented):
+   `functions/scripts/copy-sis.mjs` copies `school-ops/src/sis/*` (minus tests)
+   into the git-ignored `functions/src/sis/` before `tsc`. Keeps one source of
+   truth while leaving the existing functions' compiled layout untouched — a
+   relative TS import would force a `rootDir` change altering every function's
+   output path (riskier to do without a deploy to verify).
 3. **File transport → Cloud Storage upload** to an admin-only `sis-imports/{uid}/…`
    path; callable receives `{storagePath}`.
 4. **Audit display → both** the just-completed run (`res.data`) and persisted

@@ -115,18 +115,26 @@ upsert — re-importing a corrected workbook overwrites in place).
 | `student_year_metrics` (overall, subjects_taken) — derived | `sis_student_year_metrics` | `${studentId}_${year}` |
 | `progress_metrics` (prev, curr, expected, raw_delta, progress_index) — derived | `sis_progress_metrics` | `${studentId}_${transition}` |
 | `risk_flags` (tier, signals) — derived | `sis_risk_flags` | `${studentId}_${year}` |
+| analytics singleton — Overview KPIs + Cohort aggregates (bottleneck grid, section spread, term slump, attendance impact, cohort trajectory) — derived | `sis_analytics` | `current` |
 
 `academic_year` is a string like `"2023-2024"`. Keep a sortable `year_start` int
-(`2023`) for ordering transitions. Derived collections (last three) are recomputed
-on every import (§6). Written records carry the standard audit fields
-(`createdAt`/`createdBy`/`updatedAt`/`updatedBy`).
+(`2023`) for ordering transitions. The derived collections + the analytics
+singleton are recomputed in full on every import (§6); per-student docs carry an
+`importBatchId` + `updatedAt`/`updatedBy`, and a post-write **generation sweep**
+deletes any doc not refreshed by the latest import (handles a shrunk roster).
 
 TypeScript interfaces live in `school-ops/src/types.ts` (`Student`, `Enrollment`,
 `AcademicRecord`, `AttendanceRecord`, `StudentYearMetrics`, `ProgressMetric`,
 `RiskFlag`, `ImportBatch`). `firestore.rules` gates every `sis_*` collection
-(read: admin tier; write: false). **Composite indexes** are added in Phase 1/2
-when the real queries land — Firestore reports the exact index needed at query
-time, so they are not guessed now.
+(read: admin tier; write: false). **Composite indexes** are added when the real
+queries land — Firestore reports the exact index needed at query time.
+
+**Code sharing.** The parser + metrics are the single source of truth in
+`school-ops/src/sis/` (oracle-validated, pure TS). The import Cloud Function
+compiles the SAME modules: a build step (`functions/scripts/copy-sis.mjs`) copies
+`school-ops/src/sis/*` (minus tests) into `functions/src/sis/` (git-ignored)
+before `tsc`. Deterministic doc-id builders live in `school-ops/src/sis/docIds.ts`
+(shared by the writer and the client read hooks).
 
 ---
 
@@ -174,11 +182,21 @@ and **fingerprint columns by meaning, not exact text**.
 - Scores are long floats (e.g. `98.9166…`). Store full precision; **round only
   for display** (1 decimal).
 
-**Import flow:** upload → parse each sheet → upsert students/enrollments/
-records/attendance (idempotent, via deterministic doc ids) → write an
-`sis_import_batches` audit row → recompute derived collections (§6) → show the
-audit (per sheet: header row, #students, subjects detected, attendance detected,
-name column) so the admin can confirm.
+**Import flow (implemented, Head Admin only):**
+1. Admin picks an `.xlsx` in the Import tab → client uploads it to Storage at
+   `sis-imports/{uid}/{ts}-{name}.xlsx` (admin-only path, `firebase.storage.rules`).
+2. Client calls the `importStudentWorkbook({ storagePath })` callable.
+3. The Cloud Function (super_admin gate) writes a `sis_import_batches` doc with
+   `status:'processing'`, downloads the file via the Admin SDK, parses it
+   (`loadWorkbookTidy`), runs `runPipeline`, then upserts every `sis_*` collection
+   via BulkWriter with deterministic ids + a generation sweep.
+4. It flips the batch doc to `completed` (per-sheet audit: header row, #students,
+   subjects detected, attendance detected, name column; + counts), writes an
+   `audit_log` entry (counts only — no names/scores), and deletes the temp upload.
+5. The client renders the per-sheet audit; the `sis_*` read hooks refresh the views.
+
+Re-importing the same (or a corrected) workbook is idempotent — deterministic ids
+overwrite in place and the sweep removes anything no longer present.
 
 ---
 
