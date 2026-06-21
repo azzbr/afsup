@@ -287,10 +287,6 @@ export default function HRReports({ employees, actor }) {
   const [jlFrom, setJlFrom] = useState(toDateInput(new Date(now.getFullYear(), now.getMonth(), 1)));
   const [jlTo, setJlTo] = useState(toDateInput(now));
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const ninetyDays = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000);
-
   // -------------------------------------------------------------- legacy four
   const gosiStats = useMemo(() => {
     const insured = employees.filter(
@@ -337,6 +333,9 @@ export default function HRReports({ employees, actor }) {
   }, [employees]);
 
   const expiryStats = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const ninetyDays = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000);
     let total = 0;
     let critical = 0;
 
@@ -359,7 +358,7 @@ export default function HRReports({ employees, actor }) {
       if (u.contractType === 'fixed_term') check(u.contractEndDate);
     }
     return { total, critical };
-  }, [employees, today, ninetyDays]);
+  }, [employees]);
 
   const eosgStats = useMemo(() => {
     const active = employees.filter((u) => u.status === 'approved');

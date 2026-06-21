@@ -501,7 +501,7 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
   // When opened via /employees/:uid, auto-select that employee once loaded.
   // setState in effect is intentional here: we're syncing UI state to a route
   // param whose target appears asynchronously via the live users subscription.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional: sync UI to an async route param */
   useEffect(() => {
     if (!initialEmployeeUid || employees.length === 0) return;
     const match = employees.find(e => e.id === initialEmployeeUid || e.uid === initialEmployeeUid);
@@ -510,6 +510,7 @@ export default function HRSystem({ user, userData, initialView = 'dashboard', in
       setActiveView('employee');
     }
   }, [initialEmployeeUid, employees]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Stats calculations
   const stats = {

@@ -144,7 +144,7 @@ const EmployeeCard = ({ employee, onClick, isSelected }) => {
 // EMPLOYEE ROW COMPONENT (Table View)
 // ============================================================================
 
-const EmployeeRow = ({ employee, onClick, isSelected, canManage }) => {
+const EmployeeRow = ({ employee, onClick, isSelected }) => {
   const initials = `${employee.firstName?.[0] || ''}${employee.lastName?.[0] || ''}`.toUpperCase() || 'U';
   const hasComplianceIssue = checkComplianceStatus(employee);
   
@@ -382,7 +382,7 @@ const FilterSidebar = ({ filters, setFilters, employees }) => {
 // MAIN HR DIRECTORY COMPONENT
 // ============================================================================
 
-export default function HRDirectory({ user, userData, onSelectEmployee }) {
+export default function HRDirectory({ userData, onSelectEmployee }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'table'
   const [selectedEmployee, setSelectedEmployee] = useState(null);

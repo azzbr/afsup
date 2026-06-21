@@ -1700,7 +1700,7 @@ const DocumentUpload = ({ label, docType, currentUrl, userId, onUpload }) => {
 // --- DOCUMENT VAULT COMPONENT ---
 const DocumentVault = ({ user }) => {
   const [documents, setDocuments] = useState({});
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
 
   // Load existing documents
   useEffect(() => {

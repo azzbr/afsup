@@ -23,7 +23,15 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // Uppercase / underscore-prefixed names are JSX components (e.g. an
+      // `icon: Icon` prop rendered as <Icon/>) or intentionally-unused bindings.
+      // argsIgnorePattern mirrors varsIgnorePattern so destructured component
+      // params used only in JSX aren't falsely flagged (no eslint-plugin-react /
+      // jsx-uses-vars in this config).
+      'no-unused-vars': [
+        'error',
+        { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^[A-Z_]' },
+      ],
     },
   },
 ])

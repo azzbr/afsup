@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { updateDoc, doc, serverTimestamp, arrayUnion, Timestamp } from 'firebase/firestore';
 import { db } from './firebase';
 import {
@@ -397,7 +397,7 @@ function CompletionModal({ isOpen, onClose, ticket, onComplete, technicianName }
       setCompletionNotes('');
       setCompletionFiles([]);
       onClose();
-    } catch (e) { alert("Failed to complete."); } finally { setSubmitting(false); }
+    } catch { alert("Failed to complete."); } finally { setSubmitting(false); }
   };
 
   if (!isOpen) return null;
@@ -629,6 +629,15 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
   const [showResolvedHistory, setShowResolvedHistory] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
 
+  // Current time for "Due Now" badges and the reopen-window check. Held in
+  // state and refreshed each minute so we never read the clock during render
+  // (react-hooks/purity), while keeping the badges accurate over time.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   // Technician display name (used for claim + completion writes)
   const techDisplayName = userData?.displayName || userData?.firstName || userData?.email?.split('@')[0] || 'Technician';
 
@@ -645,12 +654,14 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
     [tickets]
   );
 
+  const myUid = user?.uid;
+  const myEmail = userData?.email;
   const myJobs = useMemo(
     () => activeTickets.filter(t =>
       t.status === 'in_progress' &&
-      (t.assignedToUid === user?.uid || (userData?.email && t.assignedTo === userData.email))
+      (t.assignedToUid === myUid || (myEmail && t.assignedTo === myEmail))
     ),
-    [activeTickets, user?.uid, userData?.email]
+    [activeTickets, myUid, myEmail]
   );
 
   const poolTickets = useMemo(
@@ -1111,7 +1122,7 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
           </h3>
           <div className="grid gap-3">
             {scheduledTasks.slice(0, 3).map(({ task, due }) => {
-              const dueNow = due instanceof Date && due.getTime() <= Date.now();
+              const dueNow = due instanceof Date && due.getTime() <= nowMs;
               return (
                 <div key={task.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center hover:bg-slate-100 transition-colors">
                   <div>
@@ -1158,7 +1169,7 @@ export default function MaintenanceView({ tickets = [], user, userData }) {
             <div className="divide-y divide-slate-100">
               {resolvedTickets.map(ticket => {
                 const canReopen = ticket.resolvedAt instanceof Date &&
-                  (Date.now() - ticket.resolvedAt.getTime()) < REOPEN_WINDOW_MS;
+                  (nowMs - ticket.resolvedAt.getTime()) < REOPEN_WINDOW_MS;
                 return (
                   <div
                     key={ticket.id}
