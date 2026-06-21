@@ -375,6 +375,27 @@ describe("can() — audit & settings", () => {
   });
 });
 
+describe("can() — student system (SIS)", () => {
+  it("student.view is admin tier only (incl. viewAll); hr/maint/staff are out", () => {
+    expect(can(staff, "student.view")).toBe(false);
+    expect(can(maint, "student.view")).toBe(false);
+    expect(can(hr, "student.view")).toBe(false);
+    expect(can(admin, "student.view")).toBe(true);
+    expect(can(superAdmin, "student.view")).toBe(true);
+    expect(can(viewAll, "student.view")).toBe(true);
+    expect(can(null, "student.view")).toBe(false);
+  });
+
+  it("student.import is Head Admin only — plain admin and viewAll are out", () => {
+    expect(can(staff, "student.import")).toBe(false);
+    expect(can(maint, "student.import")).toBe(false);
+    expect(can(hr, "student.import")).toBe(false);
+    expect(can(admin, "student.import")).toBe(false);
+    expect(can(viewAll, "student.import")).toBe(false);
+    expect(can(superAdmin, "student.import")).toBe(true);
+  });
+});
+
 describe("can() — viewAll override", () => {
   it("viewAll grants admin-equivalent OPERATIONS access", () => {
     expect(can(viewAll, "ticket.delete")).toBe(true);

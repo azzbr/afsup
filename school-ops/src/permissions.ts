@@ -82,7 +82,10 @@ export type Action =
   | "audit.readAll"
   | "notification.read.broadcast"
   | "settings.read"
-  | "settings.edit";
+  | "settings.edit"
+  // Student System (SIS)
+  | "student.view"
+  | "student.import";
 
 // Target shapes passed alongside the action when a check needs context.
 export type Target =
@@ -268,6 +271,17 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
 
     case "settings.edit":
       // School-wide knobs are principal-only; viewAll must never grant this.
+      return isSuperAdmin;
+
+    // ------------------------------------------------------- student system (SIS)
+    case "student.view":
+      // Student data is admin-tier only — mirrors canSeeRoleView("student") and
+      // the sis_* read rules. hr/maintenance/staff are excluded.
+      return isAdmin;
+
+    case "student.import":
+      // Running a workbook import is a destructive bulk overwrite — Head Admin
+      // only; viewAll must never grant it (mirrors functions canImportStudents).
       return isSuperAdmin;
 
     default: {
