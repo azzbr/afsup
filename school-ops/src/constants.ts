@@ -375,25 +375,11 @@ export const LEAVE_TYPE_LABELS: Record<LeaveType, string> = {
 };
 
 // ============================================================================
-// STUDENT SYSTEM (SIS) — see SIS/CLAUDE.md. Phase 0 defines the risk-tier
-// vocabulary so later phases can map flags onto badge colors. Thresholds that
-// assign a student to a tier are NOT defined here — they belong to the Phase 1
-// metrics port and its oracle.
+// STUDENT SYSTEM (SIS) — see SIS/CLAUDE.md. The risk-tier vocabulary lives in
+// the SIS module (src/sis/riskTiers.ts) so the metrics engine ported into the
+// import Cloud Function stays decoupled from this client barrel; re-exported
+// here for the UI. Thresholds that assign a tier belong to the metrics port.
 // ============================================================================
 
-export const STUDENT_RISK_TIERS = [
-  "critical",
-  "attendance_risk",
-  "slipping",
-  "hidden_gem",
-  "on_track",
-] as const;
-export type StudentRiskTier = (typeof STUDENT_RISK_TIERS)[number];
-
-export const STUDENT_RISK_LABELS: Record<StudentRiskTier, string> = {
-  critical: "Critical",
-  attendance_risk: "Attendance Risk",
-  slipping: "Slipping",
-  hidden_gem: "Hidden Gem",
-  on_track: "On Track",
-};
+export { STUDENT_RISK_TIERS, STUDENT_RISK_LABELS } from "./sis/riskTiers";
+export type { StudentRiskTier } from "./sis/riskTiers";

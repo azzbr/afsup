@@ -7,7 +7,7 @@ import { db } from "./admin";
 export interface AuditEntry {
   actorUid: string;
   action: string; // e.g. "user.invited", "user.approved"
-  targetType: "user" | "ticket" | "leave_request" | "scheduled_task" | "invitation" | "school_settings";
+  targetType: "user" | "ticket" | "leave_request" | "scheduled_task" | "invitation" | "school_settings" | "student";
   targetId: string;
   /**
    * True when the entry concerns an admin-tier (admin/super_admin) user.

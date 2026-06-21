@@ -10,3 +10,4 @@ export { bootstrapSuperAdmin } from "./bootstrapSuperAdmin";
 export { onTicketStatusChange } from "./onTicketStatusChange";
 export { decideLeaveRequest } from "./decideLeaveRequest";
 export { updateSchoolSettings } from "./updateSchoolSettings";
+export { importStudentWorkbook } from "./importStudentWorkbook";

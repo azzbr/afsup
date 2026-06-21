@@ -13,7 +13,7 @@ import {
   cutBand,
 } from "./lib/numeric";
 import type { StudentId, Tidy } from "./types";
-import type { StudentRiskTier } from "../constants";
+import type { StudentRiskTier } from "./riskTiers";
 
 // ---------------------------------------------------------------------------
 // internal helpers

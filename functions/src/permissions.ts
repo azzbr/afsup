@@ -89,3 +89,20 @@ export function canDeleteUser(
   }
   return false;
 }
+
+/** True for the admin tier (admin OR super_admin) — the Student System READ scope. */
+export function isAdminTierRole(role: Role): boolean {
+  return role === "admin" || role === "super_admin";
+}
+
+/**
+ * Who may run a Student System workbook import — Head Admin (super_admin) ONLY.
+ * An import is a destructive bulk overwrite of academic data, treated like
+ * settings.edit. The legacy viewAll flag does NOT qualify (mirrors the client
+ * `student.import` action and the Phase-2.9.1 HR-data lockdown).
+ */
+export function canImportStudents(actor: ActorDoc | null): boolean {
+  if (!actor) return false;
+  if (actor.status === "blocked" || actor.status === "suspended") return false;
+  return actor.role === "super_admin";
+}

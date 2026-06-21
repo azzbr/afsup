@@ -280,5 +280,10 @@ service cloud.firestore {
       allow read: if isAdmin();
       allow write: if false; // Cloud Functions only.
     }
+    // Workbook-level aggregates singleton (Overview KPIs + Cohort Analysis).
+    match /sis_analytics/{docId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
   }
 }
