@@ -7,6 +7,7 @@
 
 import React, { useState } from 'react';
 import { GraduationCap, Users, AlertTriangle, TrendingUp, Layers, Upload } from 'lucide-react';
+import ImportTab from './ImportTab';
 
 // Placeholder academic-year options. Real years come from imported data later
 // (golden rule: do not hardcode years in logic — these are display-only stubs).
@@ -36,7 +37,7 @@ function EmptyState() {
   );
 }
 
-export default function StudentSystem() {
+export default function StudentSystem({ user, actor }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [academicYear, setAcademicYear] = useState(YEAR_OPTIONS[0]);
 
@@ -86,10 +87,15 @@ export default function StudentSystem() {
         ))}
       </div>
 
-      {/* --- Content: every tab is empty in Phase 0 --- */}
-      <div className="bg-white rounded-2xl border border-slate-200">
-        <EmptyState />
-      </div>
+      {/* --- Content --- */}
+      {activeTab === 'import' ? (
+        <ImportTab user={user} actor={actor} />
+      ) : (
+        // Overview / Students / Cohort / Early Warning land in Phases 1g–1j.
+        <div className="bg-white rounded-2xl border border-slate-200">
+          <EmptyState />
+        </div>
+      )}
     </div>
   );
 }
