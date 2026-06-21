@@ -19,7 +19,7 @@ export function useRouteContext(): RouteContext {
 }
 
 interface RequireCanProps {
-  view: "staff" | "maintenance" | "hr" | "admin";
+  view: "staff" | "maintenance" | "hr" | "admin" | "student";
   children: ReactNode;
 }
 

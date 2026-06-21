@@ -6,6 +6,7 @@ import RootLayout from "./routes/RootLayout";
 import StaffRoute from "./routes/StaffRoute";
 import MaintenanceRoute from "./routes/MaintenanceRoute";
 import AdminRoute from "./routes/AdminRoute";
+import StudentRoute from "./routes/StudentRoute";
 import HRRoute from "./routes/HRRoute";
 import ProfileRoute from "./routes/ProfileRoute";
 import StaffDirectoryRoute from "./routes/StaffDirectoryRoute";
@@ -39,6 +40,14 @@ export const router = createBrowserRouter([
         element: (
           <RequireCan view="admin">
             <AdminRoute />
+          </RequireCan>
+        ),
+      },
+      {
+        path: "student",
+        element: (
+          <RequireCan view="student">
+            <StudentRoute />
           </RequireCan>
         ),
       },

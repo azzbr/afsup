@@ -240,5 +240,45 @@ service cloud.firestore {
       allow read: if isAdmin() || isHR();
       allow write: if false; // Cloud Functions only.
     }
+
+    // 9. Student System (SIS) — see SIS/CLAUDE.md
+    //
+    // Student data is admin-tier only (admin + Head Admin); hr, maintenance,
+    // staff, and anonymous users have no access. Clients only READ. All writes
+    // go through the Phase-1 import Cloud Function (Admin SDK, which bypasses
+    // these rules), so grades and risk flags can never be tampered with from
+    // the browser. isAdmin() already means admin OR super_admin.
+    match /sis_students/{studentId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
+    match /sis_enrollments/{enrollmentId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
+    match /sis_academic_records/{recordId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
+    match /sis_attendance/{attendanceId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
+    match /sis_import_batches/{batchId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
+    match /sis_student_year_metrics/{metricId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
+    match /sis_progress_metrics/{progressId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
+    match /sis_risk_flags/{flagId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only.
+    }
   }
 }

@@ -507,6 +507,7 @@ Do not pursue these without explicit re-discussion:
 - [firestore.rules](firestore.rules) — server-side data security
 - [firebase.storage.rules](firebase.storage.rules) — server-side file security
 - [netlify.toml](netlify.toml) — deployment config
+- [SIS/CLAUDE.md](SIS/CLAUDE.md) — Student System (SIS) module design (Firestore-native); see also [SIS/STACK.md](SIS/STACK.md) and [SIS/PLAN.md](SIS/PLAN.md)
 
 ---
 

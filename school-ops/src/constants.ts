@@ -373,3 +373,27 @@ export const LEAVE_TYPE_LABELS: Record<LeaveType, string> = {
   study: "Study Leave",
   unpaid: "Unpaid Leave",
 };
+
+// ============================================================================
+// STUDENT SYSTEM (SIS) — see SIS/CLAUDE.md. Phase 0 defines the risk-tier
+// vocabulary so later phases can map flags onto badge colors. Thresholds that
+// assign a student to a tier are NOT defined here — they belong to the Phase 1
+// metrics port and its oracle.
+// ============================================================================
+
+export const STUDENT_RISK_TIERS = [
+  "critical",
+  "attendance_risk",
+  "slipping",
+  "hidden_gem",
+  "on_track",
+] as const;
+export type StudentRiskTier = (typeof STUDENT_RISK_TIERS)[number];
+
+export const STUDENT_RISK_LABELS: Record<StudentRiskTier, string> = {
+  critical: "Critical",
+  attendance_risk: "Attendance Risk",
+  slipping: "Slipping",
+  hidden_gem: "Hidden Gem",
+  on_track: "On Track",
+};

@@ -1,0 +1,8 @@
+# Never commit the real student workbook or any spreadsheet data — children's PII.
+*.xlsx
+*.xls
+*.csv
+
+# Transient artifacts (cloud patch, scratch brief) — not part of the repo.
+*.patch
+SSS.txt

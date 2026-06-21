@@ -453,6 +453,15 @@ describe("canSeeRoleView", () => {
     expect(canSeeRoleView(viewAll, "admin")).toBe(true);
   });
 
+  it("student tab visible to admin tier only — hr/maintenance/staff are out", () => {
+    expect(canSeeRoleView(staff, "student")).toBe(false);
+    expect(canSeeRoleView(maint, "student")).toBe(false);
+    expect(canSeeRoleView(hr, "student")).toBe(false);
+    expect(canSeeRoleView(admin, "student")).toBe(true);
+    expect(canSeeRoleView(superAdmin, "student")).toBe(true);
+    expect(canSeeRoleView(viewAll, "student")).toBe(true);
+  });
+
   it("denies everything when actor is null", () => {
     expect(canSeeRoleView(null, "staff")).toBe(false);
     expect(canSeeRoleView(null, "admin")).toBe(false);

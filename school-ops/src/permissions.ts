@@ -291,7 +291,7 @@ export function can(actor: Actor | null | undefined, action: Action, target?: Ta
  */
 export function canSeeRoleView(
   actor: Actor | null | undefined,
-  view: "staff" | "maintenance" | "hr" | "admin",
+  view: "staff" | "maintenance" | "hr" | "admin" | "student",
 ): boolean {
   if (!actor) return false;
   const isAdmin = actor.role === "admin" || actor.role === "super_admin" || actor.viewAll === true;
@@ -306,6 +306,9 @@ export function canSeeRoleView(
       // viewAll are deliberately excluded.
       return actor.role === "hr" || actor.role === "super_admin";
     case "admin":
+      return isAdmin;
+    case "student":
+      // Student data is admin-tier only — same audience as the admin view.
       return isAdmin;
     default: {
       const _exhaustive: never = view;

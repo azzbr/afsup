@@ -77,6 +77,7 @@ const navItems = [
   { to: '/maintenance',      label: 'View Tickets',      view: 'maintenance' },
   { to: '/hr',               label: 'HR Dashboard',      view: 'hr'          },
   { to: '/admin',            label: 'Admin System',      view: 'admin'       },
+  { to: '/student',          label: 'Student System',    view: 'student'     },
 ];
 
 // Head Admin chip is indigo, every other role stays neutral slate.

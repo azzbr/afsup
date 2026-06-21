@@ -19,6 +19,7 @@ import type {
   Subject,
   Grade,
   BloodType,
+  StudentRiskTier,
 } from "./constants";
 
 // ============================================================================
@@ -338,4 +339,84 @@ export interface SchoolSettings {
   notifyOnCriticalCompliance?: string[];
   updatedAt?: Date | null;
   updatedBy?: string | null;
+}
+
+// ============================================================================
+// STUDENT SYSTEM (SIS) — see SIS/CLAUDE.md for the Firestore-native data model.
+//
+// Each collection uses a deterministic document id (shown per interface) that
+// stands in for the original spec's SQL UNIQUE(...) constraint: re-importing the
+// same logical record overwrites in place (idempotent upsert). Fields here are
+// the minimal Phase-0 shape; they are refined in Phase 1 alongside the metrics
+// port (and its oracle). All writes are server-side (import Cloud Function);
+// clients only read (admin tier).
+// ============================================================================
+
+/** sis_students/{studentId} */
+export interface Student extends Partial<AuditFields> {
+  studentId: string;
+  firstName?: string;
+  lastName?: string;
+  gender?: string;
+  dateOfBirth?: Date | null;
+}
+
+/** sis_enrollments/{studentId}_{year} */
+export interface Enrollment extends Partial<AuditFields> {
+  studentId: string;
+  year: string;
+  grade?: Grade | string;
+  homeroomClass?: string;
+}
+
+/** sis_academic_records/{studentId}_{year}_{subject}_{term} */
+export interface AcademicRecord extends Partial<AuditFields> {
+  studentId: string;
+  year: string;
+  subject: Subject | string;
+  term: string;
+  score?: number;
+  grade?: string;
+}
+
+/** sis_attendance/{studentId}_{year}_{term} */
+export interface AttendanceRecord extends Partial<AuditFields> {
+  studentId: string;
+  year: string;
+  term: string;
+  present?: number;
+  absent?: number;
+  late?: number;
+}
+
+/** sis_student_year_metrics/{studentId}_{year} (computed) */
+export interface StudentYearMetrics extends Partial<AuditFields> {
+  studentId: string;
+  year: string;
+  attainmentAvg?: number;
+  attendanceRate?: number;
+}
+
+/** sis_progress_metrics/{studentId}_{transition} (computed, e.g. "2024-2025") */
+export interface ProgressMetric extends Partial<AuditFields> {
+  studentId: string;
+  transition: string;
+  delta?: number;
+}
+
+/** sis_risk_flags/{studentId}_{year} (computed) */
+export interface RiskFlag extends Partial<AuditFields> {
+  studentId: string;
+  year: string;
+  tier?: StudentRiskTier;
+  reasons?: string[];
+}
+
+/** sis_import_batches/{autoId} */
+export interface ImportBatch extends Partial<AuditFields> {
+  id: string;
+  fileName?: string;
+  status?: "pending" | "processing" | "completed" | "failed";
+  rowsProcessed?: number;
+  error?: string;
 }
