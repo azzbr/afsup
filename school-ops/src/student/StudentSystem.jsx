@@ -1,24 +1,17 @@
-// Student System (SIS) view shell — see SIS/CLAUDE.md.
-//
-// Phase 0 is the empty, native-looking shell: KPI placeholder cards, a tab bar,
-// and an academic-year selector. No data hooks, no real values, no import yet —
-// those land in Phases 1+. UI patterns are copied from AdminView.jsx so the
-// module looks native.
+// Student System (SIS) shell — see SIS/CLAUDE.md. KPI cards + academic-year
+// selector + tab bar, then the active tab's content. KPIs and the year list are
+// data-driven from sis_analytics/current; the four data tabs read the sis_*
+// collections (admin-tier only). Import tab is Head-Admin gated inside ImportTab.
 
 import React, { useState } from 'react';
 import { GraduationCap, Users, AlertTriangle, TrendingUp, Layers, Upload } from 'lucide-react';
+import { useSisAnalytics } from '../data/useSisAnalytics';
+import { fmtPct } from './format';
+import OverviewTab from './OverviewTab';
+import StudentsTab from './StudentsTab';
+import CohortAnalysisTab from './CohortAnalysisTab';
+import EarlyWarningTab from './EarlyWarningTab';
 import ImportTab from './ImportTab';
-
-// Placeholder academic-year options. Real years come from imported data later
-// (golden rule: do not hardcode years in logic — these are display-only stubs).
-const YEAR_OPTIONS = ['2025-2026', '2024-2025', '2023-2024'];
-
-const KPI_CARDS = [
-  { label: 'Total Students', icon: GraduationCap, color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-100' },
-  { label: 'Tracked Cohort', icon: Users, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
-  { label: 'At-Risk', icon: AlertTriangle, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100' },
-  { label: 'Avg Attainment %', icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
-];
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: GraduationCap },
@@ -28,55 +21,68 @@ const TABS = [
   { id: 'import', label: 'Import', icon: Upload },
 ];
 
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center text-center py-16 text-slate-400">
-      <GraduationCap size={40} className="mb-3 opacity-40" />
-      <p className="text-sm font-medium text-slate-500">No data yet — import a workbook.</p>
-    </div>
-  );
-}
+const KPI_META = [
+  { key: 'totalStudents', label: 'Total Students', color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-100' },
+  { key: 'trackedCohort', label: 'Tracked Cohort', color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
+  { key: 'atRisk', label: 'At-Risk', color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100' },
+  { key: 'avgAttainment', label: 'Avg Attainment %', color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
+];
 
 export default function StudentSystem({ user, actor }) {
   const [activeTab, setActiveTab] = useState('overview');
-  const [academicYear, setAcademicYear] = useState(YEAR_OPTIONS[0]);
+  const [yearOverride, setYearOverride] = useState(null);
+  const { data: analytics } = useSisAnalytics(actor);
+
+  const years = analytics?.years ?? [];
+  const year = yearOverride ?? analytics?.latestYear ?? years[years.length - 1] ?? '';
+  const kpis = analytics?.kpis;
+
+  const kpiValue = (k) => {
+    if (!kpis) return '—';
+    if (k === 'avgAttainment') return fmtPct(kpis.avgAttainment);
+    return kpis[k] ?? '—';
+  };
 
   return (
     <div className="space-y-6">
-
-      {/* --- Header row: KPI context + year selector --- */}
+      {/* --- Header row: year selector --- */}
       <div className="flex items-center justify-end">
         <label className="flex items-center gap-2 text-sm text-slate-600">
           Academic Year
           <select
-            value={academicYear}
-            onChange={(e) => setAcademicYear(e.target.value)}
-            className="px-2 py-1.5 border border-slate-200 rounded-lg text-sm"
+            value={year}
+            onChange={(e) => setYearOverride(e.target.value)}
+            disabled={years.length === 0}
+            className="px-2 py-1.5 border border-slate-200 rounded-lg text-sm disabled:opacity-50"
           >
-            {YEAR_OPTIONS.map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
+            {years.length === 0 ? (
+              <option value="">—</option>
+            ) : (
+              years.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))
+            )}
           </select>
         </label>
       </div>
 
-      {/* --- KPI Cards (placeholders in Phase 0) --- */}
+      {/* --- KPI Cards (live from sis_analytics) --- */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {KPI_CARDS.map((card) => (
-          <div key={card.label} className={`p-4 rounded-2xl border ${card.bg} ${card.border}`}>
-            <p className={`text-2xl font-bold ${card.color}`}>—</p>
+        {KPI_META.map((card) => (
+          <div key={card.key} className={`p-4 rounded-2xl border ${card.bg} ${card.border}`}>
+            <p className={`text-2xl font-bold ${card.color}`}>{kpiValue(card.key)}</p>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{card.label}</p>
           </div>
         ))}
       </div>
 
       {/* --- Tabs --- */}
-      <div className="flex gap-2 border-b border-slate-200 pb-1">
+      <div className="flex gap-2 border-b border-slate-200 pb-1 overflow-x-auto">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap ${
               activeTab === tab.id
                 ? 'bg-white text-indigo-600 border-b-2 border-indigo-600'
                 : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
@@ -88,14 +94,11 @@ export default function StudentSystem({ user, actor }) {
       </div>
 
       {/* --- Content --- */}
-      {activeTab === 'import' ? (
-        <ImportTab user={user} actor={actor} />
-      ) : (
-        // Overview / Students / Cohort / Early Warning land in Phases 1g–1j.
-        <div className="bg-white rounded-2xl border border-slate-200">
-          <EmptyState />
-        </div>
-      )}
+      {activeTab === 'overview' && <OverviewTab actor={actor} />}
+      {activeTab === 'students' && <StudentsTab actor={actor} year={year} />}
+      {activeTab === 'cohort' && <CohortAnalysisTab actor={actor} />}
+      {activeTab === 'early_warning' && <EarlyWarningTab actor={actor} />}
+      {activeTab === 'import' && <ImportTab user={user} actor={actor} />}
     </div>
   );
 }
