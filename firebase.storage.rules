@@ -19,14 +19,11 @@ service firebase.storage {
     // Limit size to 5MB
     function isSmallEnough() { return request.resource.size < 5 * 1024 * 1024; }
 
-    // SIS workbook upload guards (Head Admin import).
-    function isSpreadsheet() {
-      return request.resource.contentType in [
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'application/vnd.ms-excel',
-        'application/octet-stream'
-      ];
-    }
+    // SIS workbook upload size guard (Head Admin import). Content-type is NOT
+    // gated here: browsers report .xlsx inconsistently (often
+    // application/x-zip-compressed, since .xlsx is a zip container), which
+    // blocked legitimate uploads. The import Cloud Function is the real
+    // validator — it parses the file and fails the batch if it isn't a workbook.
     function isWorkbookSize() { return request.resource.size < 15 * 1024 * 1024; }
 
     // MAINTENANCE IMAGES (Public read for staff)
@@ -67,7 +64,7 @@ service firebase.storage {
     match /sis-imports/{uid}/{fileName} {
       allow read: if isAuth() && request.auth.uid == uid && callerRole() == 'super_admin';
       allow create: if isAuth() && request.auth.uid == uid && callerRole() == 'super_admin'
-                    && isSpreadsheet() && isWorkbookSize();
+                    && isWorkbookSize();
     }
   }
 }
