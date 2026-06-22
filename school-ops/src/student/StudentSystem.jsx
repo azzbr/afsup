@@ -4,7 +4,7 @@
 // collections (admin-tier only). Import tab is Head-Admin gated inside ImportTab.
 
 import React, { useState } from 'react';
-import { GraduationCap, Users, AlertTriangle, TrendingUp, Layers, Upload } from 'lucide-react';
+import { GraduationCap, Users, AlertTriangle, TrendingUp, Layers, Upload, Info } from 'lucide-react';
 import { useSisAnalytics } from '../data/useSisAnalytics';
 import { fmtPct } from './format';
 import OverviewTab from './OverviewTab';
@@ -12,6 +12,7 @@ import StudentsTab from './StudentsTab';
 import CohortAnalysisTab from './CohortAnalysisTab';
 import EarlyWarningTab from './EarlyWarningTab';
 import ImportTab from './ImportTab';
+import AboutTab from './AboutTab';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: GraduationCap },
@@ -19,6 +20,7 @@ const TABS = [
   { id: 'cohort', label: 'Cohort Analysis', icon: Layers },
   { id: 'early_warning', label: 'Early Warning', icon: AlertTriangle },
   { id: 'import', label: 'Import', icon: Upload },
+  { id: 'about', label: 'About', icon: Info },
 ];
 
 const KPI_META = [
@@ -99,6 +101,7 @@ export default function StudentSystem({ actor }) {
       {activeTab === 'cohort' && <CohortAnalysisTab actor={actor} />}
       {activeTab === 'early_warning' && <EarlyWarningTab actor={actor} />}
       {activeTab === 'import' && <ImportTab actor={actor} />}
+      {activeTab === 'about' && <AboutTab />}
     </div>
   );
 }
