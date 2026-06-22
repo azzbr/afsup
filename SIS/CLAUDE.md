@@ -183,17 +183,21 @@ and **fingerprint columns by meaning, not exact text**.
   for display** (1 decimal).
 
 **Import flow (implemented, Head Admin only):**
-1. Admin picks an `.xlsx` in the Import tab → client uploads it to Storage at
-   `sis-imports/{uid}/{ts}-{name}.xlsx` (admin-only path, `firebase.storage.rules`).
-2. Client calls the `importStudentWorkbook({ storagePath })` callable.
-3. The Cloud Function (super_admin gate) writes a `sis_import_batches` doc with
-   `status:'processing'`, downloads the file via the Admin SDK, parses it
-   (`loadWorkbookTidy`), runs `runPipeline`, then upserts every `sis_*` collection
-   via BulkWriter with deterministic ids + a generation sweep.
-4. It flips the batch doc to `completed` (per-sheet audit: header row, #students,
-   subjects detected, attendance detected, name column; + counts), writes an
-   `audit_log` entry (counts only — no names/scores), and deletes the temp upload.
-5. The client renders the per-sheet audit; the `sis_*` read hooks refresh the views.
+1. Admin picks an `.xlsx` in the Import tab → the client sends its bytes as base64
+   in the `importStudentWorkbook({ fileBase64, fileName })` callable. (No Cloud
+   Storage hop — the workbook is small, and this avoids a Storage-rules/bucket
+   surface that proved flaky; PII is parsed in memory, never written as a file.)
+2. The Cloud Function (super_admin gate) writes a `sis_import_batches` doc with
+   `status:'processing'`, decodes the bytes, parses them (`loadWorkbookTidy`), runs
+   `runPipeline`, then upserts every `sis_*` collection via BulkWriter with
+   deterministic ids + a generation sweep.
+3. It flips the batch doc to `completed` (per-sheet audit: header row, #students,
+   subjects detected, attendance detected, name column; + counts) and writes an
+   `audit_log` entry (counts only — no names/scores).
+4. The client renders the per-sheet audit; the `sis_*` read hooks refresh the views.
+
+(The `sis-imports/` Storage path + rule are now unused but left in place for a
+possible future large-workbook path.)
 
 Re-importing the same (or a corrected) workbook is idempotent — deterministic ids
 overwrite in place and the sweep removes anything no longer present.

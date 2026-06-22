@@ -28,7 +28,7 @@ const KPI_META = [
   { key: 'avgAttainment', label: 'Avg Attainment %', color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
 ];
 
-export default function StudentSystem({ user, actor }) {
+export default function StudentSystem({ actor }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [yearOverride, setYearOverride] = useState(null);
   const { data: analytics } = useSisAnalytics(actor);
@@ -98,7 +98,7 @@ export default function StudentSystem({ user, actor }) {
       {activeTab === 'students' && <StudentsTab actor={actor} year={year} />}
       {activeTab === 'cohort' && <CohortAnalysisTab actor={actor} />}
       {activeTab === 'early_warning' && <EarlyWarningTab actor={actor} />}
-      {activeTab === 'import' && <ImportTab user={user} actor={actor} />}
+      {activeTab === 'import' && <ImportTab actor={actor} />}
     </div>
   );
 }

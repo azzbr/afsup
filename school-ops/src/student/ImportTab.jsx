@@ -4,10 +4,9 @@
 // deletes it afterwards (PII never lingers, never parsed in the browser).
 
 import React, { useState } from 'react';
-import { ref, uploadBytes } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
 import { Upload, Loader2, CheckCircle, AlertCircle, ShieldAlert } from 'lucide-react';
-import { storage, functions } from '../firebase';
+import { functions } from '../firebase';
 import { can } from '../permissions';
 import { useImportBatches } from '../data/useImportBatches';
 import ImportAuditPanel from './ImportAuditPanel';
@@ -26,7 +25,19 @@ function StatusBadge({ status }) {
   );
 }
 
-export default function ImportTab({ user, actor }) {
+// Encode a File's bytes to base64 in chunks (avoids call-stack overflow on
+// String.fromCharCode for larger files).
+async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+export default function ImportTab({ actor }) {
   const canImport = can(actor, 'student.import');
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -50,15 +61,13 @@ export default function ImportTab({ user, actor }) {
   };
 
   const handleImport = async () => {
-    if (!file || !user?.uid) return;
+    if (!file) return;
     setBusy(true);
     setError(null);
     setResult(null);
     try {
-      const safeName = file.name.replace(/[^\w.-]+/g, '_');
-      const path = `sis-imports/${user.uid}/${Date.now()}-${safeName}`;
-      await uploadBytes(ref(storage, path), file, { contentType: file.type || 'application/octet-stream' });
-      const res = await httpsCallable(functions, 'importStudentWorkbook')({ storagePath: path });
+      const fileBase64 = await fileToBase64(file);
+      const res = await httpsCallable(functions, 'importStudentWorkbook')({ fileBase64, fileName: file.name });
       setResult(res.data);
       setFile(null);
     } catch (err) {
